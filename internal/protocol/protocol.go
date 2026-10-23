@@ -28,6 +28,7 @@ const (
 type Item struct {
 	Script                      string // set by scan.Run, not by Parse
 	ID, Name, Category, Explain string
+	View                        string // separate view name; empty for the main list
 	Paths                       []string
 	Size                        int64
 	Grade                       Grade
@@ -114,6 +115,8 @@ func setField(it *Item, seen map[string]bool, key, val string) error {
 		it.Category = val
 	case "explain":
 		it.Explain = val
+	case "view":
+		it.View = val
 	case "path":
 		it.Paths = append(it.Paths, val)
 	case "warn":

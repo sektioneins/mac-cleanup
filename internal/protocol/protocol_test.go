@@ -124,3 +124,24 @@ func TestKey(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestParseView(t *testing.T) {
+	got, err := Parse(strings.NewReader("item\n" + base + "view\t~/Library/Caches\nend\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].View != "~/Library/Caches" {
+		t.Errorf("View = %q", got[0].View)
+	}
+	got, err = Parse(strings.NewReader("item\n" + base + "end\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].View != "" {
+		t.Errorf("View = %q, want empty", got[0].View)
+	}
+	_, err = Parse(strings.NewReader("item\n" + base + "view\ta\nview\tb\nend\n"))
+	if err == nil || !strings.Contains(err.Error(), "line 11") || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("duplicate view error = %v", err)
+	}
+}

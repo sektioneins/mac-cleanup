@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestLibraryCaches(t *testing.T) {
 	}
 	it := items[0]
 	dir := filepath.Join(caches, "com.example.app")
-	if it.ID != "com.example.app" || it.Name != "com.example.app" || it.Category != "Library" || it.Grade != protocol.Regenerates || it.Default != protocol.Trash {
+	if it.ID != "com.example.app" || it.Name != "com.example.app" || it.Category != "Library" || it.Grade != protocol.Regenerates || it.Default != protocol.Delete || it.View != "~/Library/Caches" {
 		t.Errorf("unexpected item %+v", it)
 	}
 	if len(it.Paths) != 1 || it.Paths[0] != dir || it.Size < 32768 || it.Explain == "" {
@@ -32,6 +33,31 @@ func TestLibraryCaches(t *testing.T) {
 	}
 	if it.Commands[protocol.Trash] == "" {
 		t.Errorf("cmd_trash missing: %v", it.Commands)
+	}
+}
+
+func TestLibraryCachesNeverWhole(t *testing.T) {
+	e := newEnv(t)
+	caches := filepath.Join(e.Home, "Library/Caches")
+	e.write(filepath.Join(caches, "a/x"), 32)
+	e.write(filepath.Join(caches, "b/x"), 32)
+	items := e.run("library-caches")
+	if len(items) == 0 {
+		t.Fatal("no items")
+	}
+	for _, it := range items {
+		for _, p := range it.Paths {
+			if strings.TrimSuffix(p, "/") == caches {
+				t.Errorf("%s: path is the Caches folder itself", it.ID)
+			}
+		}
+		for a, c := range it.Commands {
+			for _, q := range []string{"'" + caches + "'", "'" + caches + "/'"} {
+				if strings.HasSuffix(c, " "+q) || strings.Contains(c, " "+q+" ") {
+					t.Errorf("%s: %s command targets the Caches folder: %s", it.ID, a, c)
+				}
+			}
+		}
 	}
 }
 

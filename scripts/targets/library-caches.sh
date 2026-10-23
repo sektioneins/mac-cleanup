@@ -16,7 +16,9 @@ for dir in "$HOME"/Library/Caches/*; do
 	mc_field category Library
 	mc_path_fields "$(mc_needs_admin "$dir")" "$dir"
 	mc_field grade regenerates
-	mc_field default trash
-	mc_field explain "The cache folder $name in ~/Library/Caches. The app that owns it rebuilds its cache on demand, so removing it costs some speed at the next start."
+	mc_field default delete
+	# shellcheck disable=SC2088 # display name, not a path
+	mc_field view "~/Library/Caches"
+	mc_field explain "The cache folder $name in ~/Library/Caches. The folder is removed and the app that owns it rebuilds it on demand, so this costs some speed at the next start."
 	mc_end
 done
