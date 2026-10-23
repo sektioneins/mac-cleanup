@@ -2,11 +2,15 @@ package scripts_test
 
 import (
 	"bytes"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"mac-cleanup/internal/protocol"
 )
@@ -37,6 +41,7 @@ func newEnv(t *testing.T) *env {
 	}
 	e.tool("pgrep", fakePgrep)
 	e.running()
+	e.bundles()
 	return e
 }
 
@@ -134,4 +139,107 @@ func (e *env) runFail(target string) (string, string) {
 func (e *env) bash(snippet string) string {
 	e.t.Helper()
 	return e.output(e.command("-c", ". lib.sh; "+snippet))
+}
+
+// lsregisterRel is the Launch Services registry tool, relative to MC_ROOT.
+const lsregisterRel = "System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+// regRecord is one record of the fake Launch Services registry dump.
+type regRecord struct {
+	Path, ID, Team, Name string
+	Unmounted            bool
+}
+
+// registry writes a fake lsregister that prints a dump of the records.
+func (e *env) registry(recs ...regRecord) {
+	e.t.Helper()
+	var b strings.Builder
+	field := func(k, v string) { fmt.Fprintf(&b, "%-28s%s\n", k+":", v) }
+	b.WriteString("Checking data integrity......\n")
+	for _, r := range recs {
+		b.WriteString(strings.Repeat("-", 80) + "\n")
+		if r.Path != "" {
+			field("path", r.Path+" (0xa1a4)")
+		}
+		field("name", r.Name)
+		field("displayName", r.Name)
+		team := r.Team
+		if team == "" {
+			team = "0000000000"
+		}
+		field("teamID", team)
+		field("identifier", r.ID)
+		field("executable", "Contents/MacOS/"+r.Name)
+		if r.Unmounted {
+			field("mount state", "not mounted")
+		} else {
+			field("mount state", "mounted")
+		}
+	}
+	b.WriteString(strings.Repeat("-", 80) + "\n")
+	stub := filepath.Join(e.Root, lsregisterRel)
+	e.mkparent(stub)
+	if err := os.WriteFile(stub+".dump", []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.exe(stub, `cat "$0.dump"`)
+}
+
+// registryFails makes the fake lsregister exit 1.
+func (e *env) registryFails() {
+	e.t.Helper()
+	e.exe(filepath.Join(e.Root, lsregisterRel), "echo broken >&2; exit 1")
+}
+
+// app writes a minimal Info.plist for a bundle at path.
+func (e *env) app(path, id, name string) {
+	e.t.Helper()
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>` + id + `</string>
+<key>CFBundleName</key><string>` + name + `</string>
+<key>CFBundleExecutable</key><string>` + name + `</string>
+</dict></plist>
+`
+	f := filepath.Join(path, "Contents", "Info.plist")
+	e.mkparent(f)
+	if err := os.WriteFile(f, []byte(plist), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// bundles writes a fake lsappinfo that lists the given bundle ids.
+func (e *env) bundles(ids ...string) {
+	e.t.Helper()
+	body := "echo 'ASN:0x0-0x1:'\necho '    bundleID=[ NULL ] '\n"
+	for _, id := range ids {
+		body += fmt.Sprintf("echo '    bundleID=\"%s\"'\n", id)
+	}
+	e.tool("lsappinfo", body)
+}
+
+// age sets atime and mtime of path and everything under it to now minus days.
+func (e *env) age(path string, days int) {
+	e.t.Helper()
+	ts := time.Now().AddDate(0, 0, -days)
+	err := filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(p, ts, ts)
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// atime returns the access time of path.
+func (e *env) atime(path string) time.Time {
+	e.t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		e.t.Fatal(err)
+	}
+	return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec)
 }

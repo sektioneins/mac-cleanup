@@ -24,8 +24,8 @@ echo "could not find $path." >&2
 exit 1
 `
 
-// app creates a 16 KiB fake app bundle and registers its mdls answers.
-func (e *env) app(name, bundleID, lastUsed string) string {
+// mdlsApp creates a 16 KiB fake app bundle and registers its mdls answers.
+func (e *env) mdlsApp(name, bundleID, lastUsed string) string {
 	e.t.Helper()
 	dir := filepath.Join(e.Root, "Applications", name+".app")
 	e.write(filepath.Join(dir, "Contents/MacOS/"+name), 16)
@@ -48,7 +48,7 @@ func mdlsDate(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 +
 func TestUnusedAppOld(t *testing.T) {
 	e := newEnv(t)
 	used := time.Now().AddDate(-2, 0, 0)
-	dir := e.app("Old", "com.example.old", mdlsDate(used))
+	dir := e.mdlsApp("Old", "com.example.old", mdlsDate(used))
 	items := e.run("unused-apps")
 	if len(items) != 1 {
 		t.Fatalf("got %d items, want 1", len(items))
@@ -73,7 +73,7 @@ func TestUnusedAppOld(t *testing.T) {
 
 func TestUnusedAppRecent(t *testing.T) {
 	e := newEnv(t)
-	e.app("New", "com.example.new", mdlsDate(time.Now().AddDate(0, 0, -7)))
+	e.mdlsApp("New", "com.example.new", mdlsDate(time.Now().AddDate(0, 0, -7)))
 	if items := e.run("unused-apps"); len(items) != 0 {
 		t.Fatalf("got %d items, want 0", len(items))
 	}
@@ -81,7 +81,7 @@ func TestUnusedAppRecent(t *testing.T) {
 
 func TestUnusedAppApple(t *testing.T) {
 	e := newEnv(t)
-	e.app("Safari", "com.apple.Safari", mdlsDate(time.Now().AddDate(-3, 0, 0)))
+	e.mdlsApp("Safari", "com.apple.Safari", mdlsDate(time.Now().AddDate(-3, 0, 0)))
 	if items := e.run("unused-apps"); len(items) != 0 {
 		t.Fatalf("got %d items, want 0", len(items))
 	}
@@ -89,7 +89,7 @@ func TestUnusedAppApple(t *testing.T) {
 
 func TestUnusedAppUnknownDate(t *testing.T) {
 	e := newEnv(t)
-	dir := e.app("Mystery", "(null)", "(null)")
+	dir := e.mdlsApp("Mystery", "(null)", "(null)")
 	old := time.Now().AddDate(-2, 0, 0)
 	if err := os.Chtimes(dir, old, old); err != nil {
 		t.Fatal(err)
@@ -113,7 +113,7 @@ func TestUnusedAppUnknownDate(t *testing.T) {
 
 func TestUnusedAppKnownDateExplain(t *testing.T) {
 	e := newEnv(t)
-	e.app("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+	e.mdlsApp("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
 	items := e.run("unused-apps")
 	if len(items) != 1 {
 		t.Fatalf("got %d items, want 1", len(items))
@@ -126,7 +126,7 @@ func TestUnusedAppKnownDateExplain(t *testing.T) {
 
 func TestUnusedAppRunningWarns(t *testing.T) {
 	e := newEnv(t)
-	dir := e.app("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+	dir := e.mdlsApp("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
 	e.tool("pgrep", regexPgrep)
 	if err := os.WriteFile(filepath.Join(e.Bin, "procs.list"), []byte(dir+"/Contents/MacOS/Old\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestUnusedAppMdlsFails(t *testing.T) {
 
 func TestUnusedAppSpotlightDateWins(t *testing.T) {
 	e := newEnv(t)
-	dir := e.app("Fresh", "com.example.fresh", mdlsDate(time.Now().AddDate(0, 0, -3)))
+	dir := e.mdlsApp("Fresh", "com.example.fresh", mdlsDate(time.Now().AddDate(0, 0, -3)))
 	old := time.Now().AddDate(-2, 0, 0)
 	if err := os.Chtimes(dir, old, old); err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestUnusedAppSpotlightDateWins(t *testing.T) {
 func TestUnusedAppRunningRegexNames(t *testing.T) {
 	for _, name := range []string{"Foo (Beta)", "C++", "What?", "App [x]", "Money$", "X{2}"} {
 		e := newEnv(t)
-		dir := e.app(name, "com.example.x", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+		dir := e.mdlsApp(name, "com.example.x", mdlsDate(time.Now().AddDate(-2, 0, 0)))
 		e.tool("pgrep", regexPgrep)
 		if err := os.WriteFile(filepath.Join(e.Bin, "procs.list"), []byte(dir+"/Contents/MacOS/x\n"), 0o644); err != nil {
 			t.Fatal(err)
