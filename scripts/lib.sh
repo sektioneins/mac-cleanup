@@ -99,6 +99,12 @@ mc_path_fields() {
 	mc_field cmd_trash "$(mc_trash_cmd "$admin" "$@")"
 }
 
+# mc_ere_escape TEXT: TEXT with extended-regex metacharacters escaped, for
+# matching a literal path with pgrep -f.
+mc_ere_escape() {
+	printf '%s\n' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g'
+}
+
 # mc_warn_running PATTERN LABEL: warn when a process matching PATTERN runs.
 mc_warn_running() {
 	local rc=0

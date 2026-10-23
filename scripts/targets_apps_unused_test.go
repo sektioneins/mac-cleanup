@@ -127,7 +127,10 @@ func TestUnusedAppKnownDateExplain(t *testing.T) {
 func TestUnusedAppRunningWarns(t *testing.T) {
 	e := newEnv(t)
 	dir := e.app("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
-	e.running(dir + "/Contents/MacOS/")
+	e.tool("pgrep", regexPgrep)
+	if err := os.WriteFile(filepath.Join(e.Bin, "procs.list"), []byte(dir+"/Contents/MacOS/Old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	items := e.run("unused-apps")
 	if len(items) != 1 {
 		t.Fatalf("got %d items, want 1", len(items))
@@ -167,5 +170,23 @@ func TestUnusedAppSpotlightDateWins(t *testing.T) {
 	}
 	if items := e.run("unused-apps"); len(items) != 0 {
 		t.Fatalf("got %d items, want 0", len(items))
+	}
+}
+
+func TestUnusedAppRunningRegexNames(t *testing.T) {
+	for _, name := range []string{"Foo (Beta)", "C++", "What?", "App [x]", "Money$", "X{2}"} {
+		e := newEnv(t)
+		dir := e.app(name, "com.example.x", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+		e.tool("pgrep", regexPgrep)
+		if err := os.WriteFile(filepath.Join(e.Bin, "procs.list"), []byte(dir+"/Contents/MacOS/x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		items := e.run("unused-apps")
+		if len(items) != 1 {
+			t.Fatalf("%s: got %d items, want 1", name, len(items))
+		}
+		if w := items[0].Warnings; len(w) != 1 || w[0] != name+" is running: quit it first" {
+			t.Errorf("%s: warnings = %q", name, w)
+		}
 	}
 }

@@ -51,7 +51,7 @@ for app in "$MC_ROOT"/Applications/*.app; do
 	mc_field grade mayneed
 	mc_field default trash
 	mc_field lastused "$used"
-	mc_warn_running "$app/Contents/MacOS/" "$name"
+	mc_warn_running "$(mc_ere_escape "$app/Contents/MacOS/")" "$name"
 	mc_field explain "$explain"
 	mc_end
 done
