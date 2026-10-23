@@ -117,6 +117,19 @@ func (e *env) run(target string) []protocol.Item {
 	return items
 }
 
+// runFail executes targets/<target>.sh, expects a non-zero exit and
+// returns stdout and stderr.
+func (e *env) runFail(target string) (string, string) {
+	e.t.Helper()
+	var stdout, stderr bytes.Buffer
+	cmd := e.command(filepath.Join("targets", target+".sh"))
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err == nil {
+		e.t.Fatalf("%s: exit 0, want a failure\nstdout: %s", target, stdout.String())
+	}
+	return stdout.String(), stderr.String()
+}
+
 // bash sources lib.sh, runs the snippet and returns stdout.
 func (e *env) bash(snippet string) string {
 	e.t.Helper()

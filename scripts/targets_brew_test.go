@@ -1,7 +1,9 @@
 package scripts_test
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mac-cleanup/internal/protocol"
@@ -30,8 +32,57 @@ func TestBrewCleanupSize(t *testing.T) {
 	if len(it.Paths) != 0 || it.Explain == "" {
 		t.Errorf("unexpected fields %+v", it)
 	}
-	if got := it.Commands[protocol.Delete]; got != "brew cleanup --prune=all" || len(it.Commands) != 1 {
+	if got := it.Commands[protocol.Delete]; got != brewCleanupCmd || len(it.Commands) != 1 {
 		t.Errorf("commands = %v", it.Commands)
+	}
+}
+
+const brewCleanupCmd = "HOMEBREW_NO_AUTOREMOVE=1 brew cleanup --prune=all"
+
+func TestBrewCleanupNoAutoremove(t *testing.T) {
+	e := newEnv(t)
+	record := filepath.Join(e.Bin, "brew.env")
+	e.tool("brew", `{ echo "args=$*"; env; } >> '`+record+`'
+echo '==> This operation would free approximately 2GB of disk space.'`)
+	items := e.run("brew-cleanup")
+	if len(items) != 1 || items[0].Commands[protocol.Delete] != brewCleanupCmd {
+		t.Fatalf("items = %+v, want cmd_delete %q", items, brewCleanupCmd)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "args=cleanup --prune=all --dry-run\n") || !strings.Contains(got, "\nHOMEBREW_NO_AUTOREMOVE=1\n") {
+		t.Errorf("scan call did not set HOMEBREW_NO_AUTOREMOVE=1:\n%s", got)
+	}
+}
+
+func TestBrewCleanupFailedWithSize(t *testing.T) {
+	e := newEnv(t)
+	e.tool("brew", `echo '==> This operation would free approximately 1GB of disk space.'
+echo 'Error: first problem' >&2
+echo 'Error: second problem' >&2
+exit 1`)
+	items := e.run("brew-cleanup")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	want := "brew cleanup --dry-run failed: Error: first problem"
+	if w := items[0].Warnings; len(w) != 1 || w[0] != want {
+		t.Errorf("warnings = %q, want [%q]", w, want)
+	}
+	if items[0].Size != 1000000000 {
+		t.Errorf("size = %d", items[0].Size)
+	}
+}
+
+func TestBrewCleanupFailedNothing(t *testing.T) {
+	e := newEnv(t)
+	e.tool("brew", `echo 'Error: no network' >&2; exit 1`)
+	stdout, stderr := e.runFail("brew-cleanup")
+	if stdout != "" || !strings.Contains(stderr, "brew cleanup --dry-run failed: Error: no network") {
+		t.Errorf("stdout %q, stderr %q", stdout, stderr)
 	}
 }
 
@@ -94,6 +145,15 @@ func TestCaskInstallers(t *testing.T) {
 	}
 	if got, want := it.Commands[protocol.Delete], "rm -rf -- '"+pkg+"'"; got != want {
 		t.Errorf("cmd_delete = %q, want %q", got, want)
+	}
+}
+
+func TestCaskInstallersBrewFails(t *testing.T) {
+	e := newEnv(t)
+	e.tool("brew", `echo 'Error: broken' >&2; exit 1`)
+	stdout, stderr := e.runFail("brew-cask-installers")
+	if stdout != "" || !strings.Contains(stderr, "brew --prefix failed") {
+		t.Errorf("stdout %q, stderr %q", stdout, stderr)
 	}
 }
 

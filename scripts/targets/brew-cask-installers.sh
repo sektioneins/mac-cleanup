@@ -4,8 +4,11 @@ set -u
 . "$(dirname "$0")/../lib.sh"
 
 command -v brew >/dev/null 2>&1 || exit 0
-prefix=$(brew --prefix 2>/dev/null) || exit 0
-[ -n "$prefix" ] || exit 0
+# brew prints its own error message on stderr; a failure fails the scan.
+if ! prefix=$(brew --prefix) || [ -z "$prefix" ]; then
+	echo "brew --prefix failed" >&2
+	exit 1
+fi
 
 for file in "$prefix"/Caskroom/*/*/*.pkg "$prefix"/Caskroom/*/*/*.dmg; do
 	[ -f "$file" ] || continue
