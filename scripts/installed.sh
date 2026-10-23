@@ -41,12 +41,15 @@ _mc_registry_records() {
 # _mc_emit KIND VALUE: one tagged line for the file splitter.
 _mc_emit() { printf '%s%s%s\n' "$1" "$_MC_US" "$2"; }
 
-# _mc_plist_apps: tagged lines for the apps found by their Info.plist.
+# _mc_plist_apps ERRFILE: tagged lines for the apps found by their Info.plist.
+# Problems that could hide an installed id (unreadable folder, unparsable
+# Info.plist) become `error` lines.
 _mc_plist_apps() {
-	local base app plist rel dirpart part key v file
+	local errf=$1 base app plist rel dirpart part key v file xml
 	for base in "$MC_ROOT/Applications" "$HOME/Applications" "$MC_ROOT/System/Applications"; do
 		[ -d "$base" ] || continue
-		find "$base" -maxdepth 3 -name '*.app' -prune -print 2>/dev/null | while IFS= read -r app; do
+		: >"$errf"
+		find "$base" -maxdepth 3 -name '*.app' -prune -print 2>"$errf" | while IFS= read -r app; do
 			file=${app##*/}
 			_mc_emit names "${file%.app}"
 			rel=${app#"$base"/}
@@ -59,7 +62,23 @@ $(printf '%s\n' "$dirpart" | tr '/' '\n')
 EOF
 			fi
 			plist="$app/Contents/Info.plist"
-			[ -f "$plist" ] || continue
+			if [ ! -f "$plist" ]; then
+				if [ -d "$app/Contents" ] && [ ! -x "$app/Contents" ]; then
+					_mc_emit error "cannot read $app"
+				fi
+				continue
+			fi
+			# plutil -lint accepts any text as an old-style plist, so check
+			# that the file parses and that its top level is a dictionary.
+			xml=$(plutil -convert xml1 -o - "$plist" 2>/dev/null) || xml=""
+			case $xml in
+			*"<dict>"* | *"<dict/>"*) ;;
+			*)
+				_mc_emit error "cannot parse $plist"
+				continue
+				;;
+			esac
+			# Keys that are absent are skipped: such a bundle has no id or name.
 			for key in CFBundleIdentifier CFBundleName CFBundleDisplayName CFBundleExecutable; do
 				v=$(plutil -extract "$key" raw -o - "$plist" 2>/dev/null) || continue
 				if [ "$key" = CFBundleIdentifier ]; then
@@ -69,6 +88,7 @@ EOF
 				fi
 			done
 		done
+		[ -s "$errf" ] && _mc_emit error "cannot read $base"
 	done
 }
 
@@ -124,12 +144,23 @@ mc_inventory() {
 		rm -f "$dir/dump.raw"
 		return 1
 	fi
-	for f in ids teams names apple stale; do : >"$dir/$f.raw"; done
+	if ! grep -q '^identifier:' "$dir/dump.raw"; then
+		echo "mac-cleanup: the Launch Services registry has no usable records" >&2
+		rm -f "$dir/dump.raw"
+		return 1
+	fi
+	for f in ids teams names apple stale error; do : >"$dir/$f.raw"; done
 	{
 		_mc_registry_tagged "$dir/dump.raw"
-		_mc_plist_apps
+		_mc_plist_apps "$dir/find.err"
 		_mc_apple_services
 	} | awk -F"$_MC_US" -v d="$dir" '{ print substr($0, length($1) + 2) >> (d "/" $1 ".raw") }'
+	rm -f "$dir/find.err"
+	if [ -s "$dir/error.raw" ]; then
+		sed 's/^/mac-cleanup: /' "$dir/error.raw" >&2
+		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error}.raw
+		return 1
+	fi
 
 	for f in ids names apple; do
 		tr '[:upper:]' '[:lower:]' <"$dir/$f.raw" | grep -v '^$' | sort -u >"$dir/$f"
@@ -137,7 +168,7 @@ mc_inventory() {
 	grep -v -e '^$' -e '^0000000000$' "$dir/teams.raw" | sort -u >"$dir/teams"
 	awk -F'\t' 'BEGIN { OFS = "\t" } { $1 = tolower($1); print }' "$dir/stale.raw" >"$dir/stale"
 	awk -F. 'NF >= 3 { print $2 }' "$dir/ids" | sort -u >"$dir/vendors"
-	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale}.raw
+	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error}.raw
 	return 0
 }
 
@@ -150,6 +181,10 @@ mc_is_bundle_id() {
 # mc_unclaimed DIR: filter for `id<TAB>rest` lines; prints those whose id is
 # not claimed by DIR/ids.
 mc_unclaimed() {
+	if [ ! -r "$1/ids" ]; then
+		echo "mac-cleanup: no installed-app list in $1" >&2
+		return 1
+	fi
 	awk -F'\t' -v idsfile="$1/ids" '
 	BEGIN {
 		while ((getline l < idsfile) > 0) {

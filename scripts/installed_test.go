@@ -269,3 +269,95 @@ func TestWarnBundles(t *testing.T) {
 		t.Errorf("failing: got %q, want %q", got, want)
 	}
 }
+
+// inventoryErr runs mc_inventory and returns its status and stderr.
+func (e *env) inventoryErr(dir string) (bool, string) {
+	e.t.Helper()
+	var stderr bytes.Buffer
+	cmd := e.command("-c", ". lib.sh; . installed.sh; mc_inventory "+dir)
+	cmd.Stderr = &stderr
+	return cmd.Run() == nil, stderr.String()
+}
+
+func TestInventoryEmptyDump(t *testing.T) {
+	e := newEnv(t)
+	e.exe(filepath.Join(e.Root, lsregisterRel), "exit 0")
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || msg == "" {
+		t.Errorf("ok = %v, stderr = %q; want a failure with a message", ok, msg)
+	}
+}
+
+func TestInventoryNoInstalledIDsIsFine(t *testing.T) {
+	e := newEnv(t)
+	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	if ok, msg := e.inventoryErr(t.TempDir()); !ok {
+		t.Errorf("failed: %s", msg)
+	}
+}
+
+func TestUnclaimedNoIDs(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	cmd := e.command("-c", ". lib.sh; . installed.sh; mc_unclaimed "+dir)
+	cmd.Stdin = strings.NewReader("com.other.app\tz\n")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err == nil || stderr.Len() == 0 || stdout.Len() != 0 {
+		t.Errorf("err = %v, stdout = %q, stderr = %q", err, stdout.String(), stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ids"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd = e.command("-c", ". lib.sh; . installed.sh; mc_unclaimed "+dir)
+	cmd.Stdin = strings.NewReader("com.other.app\tz\n")
+	if got := e.output(cmd); got != "com.other.app\tz\n" {
+		t.Errorf("empty ids: got %q", got)
+	}
+}
+
+func TestInventoryUnreadableAppFolder(t *testing.T) {
+	e := newEnv(t)
+	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	locked := filepath.Join(e.Root, "Applications", "Locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || msg == "" {
+		t.Errorf("ok = %v, stderr = %q; want a failure with a message", ok, msg)
+	}
+}
+
+func TestInventoryBrokenPlist(t *testing.T) {
+	e := newEnv(t)
+	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	e.write(filepath.Join(e.Root, "Applications/Bad.app/Contents/Info.plist"), 1)
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || !strings.Contains(msg, "Bad.app") {
+		t.Errorf("ok = %v, stderr = %q; want a failure naming the app", ok, msg)
+	}
+}
+
+func TestInventoryPlistWithoutID(t *testing.T) {
+	e := newEnv(t)
+	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	e.app(filepath.Join(e.Root, "Applications/Good.app"), "com.example.good", "Good")
+	noID := filepath.Join(e.Root, "Applications/NoID.app/Contents/Info.plist")
+	e.mkparent(noID)
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleName</key><string>NoID</string></dict></plist>
+`
+	if err := os.WriteFile(noID, []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.mkparent(filepath.Join(e.Root, "Applications/Bare.app/x"))
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if ids := readLines(t, filepath.Join(dir, "ids")); !contains(ids, "com.example.good") {
+		t.Errorf("ids = %q", ids)
+	}
+}
