@@ -101,8 +101,39 @@ func TestUnusedAppUnknownDate(t *testing.T) {
 	if d := items[0].LastUsed - old.Unix(); d < -1 || d > 1 {
 		t.Errorf("LastUsed = %d, want mtime %d", items[0].LastUsed, old.Unix())
 	}
-	if items[0].Name != "Mystery (last opened: unknown)" {
-		t.Errorf("name = %q", items[0].Name)
+	if want := "Mystery (never opened per Spotlight, unchanged since " + old.Format("Jan 2006") + ")"; items[0].Name != want {
+		t.Errorf("name = %q, want %q", items[0].Name, want)
+	}
+	want := "macOS has no record of this app being opened. The app has not changed since " + old.Format("Jan 2006") +
+		", which is usually when it was installed or last updated. It does not come back by itself; you would have to install it again, and its settings stay in your Library."
+	if items[0].Explain != want {
+		t.Errorf("explain = %q, want %q", items[0].Explain, want)
+	}
+}
+
+func TestUnusedAppKnownDateExplain(t *testing.T) {
+	e := newEnv(t)
+	e.app("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+	items := e.run("unused-apps")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	want := "The application Old.app, not opened for over a year. It does not come back by itself; you would have to install it again, and its settings stay in your Library."
+	if items[0].Explain != want || len(items[0].Warnings) != 0 {
+		t.Errorf("explain = %q, warnings %q", items[0].Explain, items[0].Warnings)
+	}
+}
+
+func TestUnusedAppRunningWarns(t *testing.T) {
+	e := newEnv(t)
+	dir := e.app("Old", "com.example.old", mdlsDate(time.Now().AddDate(-2, 0, 0)))
+	e.running(dir + "/Contents/MacOS/")
+	items := e.run("unused-apps")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if w := items[0].Warnings; len(w) != 1 || w[0] != "Old is running: quit it first" {
+		t.Errorf("warnings = %q", w)
 	}
 }
 
@@ -119,8 +150,8 @@ func TestUnusedAppMdlsFails(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("got %d items, want 1", len(items))
 	}
-	if items[0].Name != "Plain (last opened: unknown)" {
-		t.Errorf("name = %q", items[0].Name)
+	if want := "Plain (never opened per Spotlight, unchanged since " + old.Format("Jan 2006") + ")"; items[0].Name != want {
+		t.Errorf("name = %q, want %q", items[0].Name, want)
 	}
 	if d := items[0].LastUsed - old.Unix(); d < -1 || d > 1 {
 		t.Errorf("LastUsed = %d, want mtime %d", items[0].LastUsed, old.Unix())

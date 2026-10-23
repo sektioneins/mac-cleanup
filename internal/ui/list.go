@@ -20,7 +20,6 @@ type row struct {
 	category string        // category of a view row
 	count    int           // folders in the view
 	size     int64
-	last     int64 // LastUsed, 0 if none
 }
 
 type group struct {
@@ -42,7 +41,7 @@ func (m Model) groups() []group {
 		}
 		g.total += it.Size
 		if it.View == "" {
-			g.rows = append(g.rows, row{item: it, size: it.Size, last: it.LastUsed})
+			g.rows = append(g.rows, row{item: it, size: it.Size})
 			continue
 		}
 		i := indexOfView(g.rows, it.View)
@@ -77,13 +76,8 @@ func indexOfView(rows []row, view string) int {
 	return -1
 }
 
+// rowLess sorts rows by size, largest first, then by key.
 func rowLess(a, b row) bool {
-	if (a.last > 0) != (b.last > 0) {
-		return a.last == 0 // rows with a last-used date go after the others
-	}
-	if a.last > 0 && a.last != b.last {
-		return a.last < b.last
-	}
 	if a.size != b.size {
 		return a.size > b.size
 	}

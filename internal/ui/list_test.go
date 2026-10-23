@@ -56,16 +56,19 @@ func TestGroupingAndOrder(t *testing.T) {
 	}
 }
 
-func TestUnusedAppsOrder(t *testing.T) {
+func TestUnusedAppsSortedBySize(t *testing.T) {
 	d, _ := fakeDeps()
 	used := func(n int64) func(*protocol.Item) {
-		return func(i *protocol.Item) { i.LastUsed = n; i.Category = "Apps" }
+		return func(i *protocol.Item) { i.LastUsed = n; i.Category = "Unused apps" }
 	}
 	m := loaded(t, *d, scan.Result{Script: "a", Items: []protocol.Item{
-		item("a", "newer-big", 9_000_000_000, used(200)),
 		item("a", "older-small", 2_000_000, used(100)),
+		item("a", "newer-big", 9_000_000_000, used(200)),
+		item("a", "unknown-mid", 5_000_000, used(0)),
 	}})
-	before(t, m.View(), "older-small", "newer-big")
+	v := m.View()
+	before(t, v, "newer-big", "unknown-mid")
+	before(t, v, "unknown-mid", "older-small")
 }
 
 func TestSmallItemsHidden(t *testing.T) {
