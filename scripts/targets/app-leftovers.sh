@@ -14,10 +14,17 @@ lib="$HOME/Library"
 
 team_re='^[A-Z0-9]{10}\.'
 
+# The first two labels (vendor) of every installed id, lowercase.
+awk -F. 'NF >= 2 { print $1 "." $2 }' "$tmp/ids" | sort -u >"$tmp/vendorpairs"
+
 # add ID PATH [TEAM]: print a candidate line unless it can't be a deleted
 # app's data.
 add() {
 	local id=$1 path=$2 team=${3:-} lid
+	# A tab or newline would corrupt the TAB separated lists.
+	case $path in
+	*$'\t'* | *$'\n'*) return 0 ;;
+	esac
 	mc_is_bundle_id "$id" || return 0
 	lid=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
 	case $lid in
@@ -30,7 +37,7 @@ add() {
 }
 
 candidates() {
-	local p name id team
+	local p name id team pair
 	for p in "$lib"/Containers/* "$lib"/WebKit/* "$lib"/Application\ Support/*; do
 		[ -d "$p" ] && [ ! -L "$p" ] && add "${p##*/}" "$p"
 	done
@@ -51,6 +58,12 @@ candidates() {
 				break
 			fi
 		done
+		# Without a team prefix, a group of an installed app's vendor is
+		# claimed (the entitlement lists are not in the registry dump).
+		if [ -z "$team" ]; then
+			pair=$(printf '%s' "$id" | awk -F. '{ print tolower($1 "." $2) }')
+			grep -qxF -- "$pair" "$tmp/vendorpairs" && continue
+		fi
 		add "$id" "$p" "$team"
 	done
 	for p in "$lib"/Preferences/*.plist; do
@@ -62,6 +75,8 @@ candidates() {
 		[ -f "$p" ] && [ ! -L "$p" ] || continue
 		name=${p##*/}
 		name=${name%.plist}
+		# Both the file name and the id before the host part must be ids.
+		mc_is_bundle_id "$name" || continue
 		add "${name%.*}" "$p"
 	done
 	for p in "$lib"/Saved\ Application\ State/*.savedState; do
@@ -120,6 +135,6 @@ while IFS=$'\t' read -r -a f; do
 	mc_warn_bundles "$display" $ids
 	mc_field grade mayneed
 	mc_field default trash
-	mc_field explain "Data in ~/Library from the app $root, which no installed app claims. Nothing in it was read or changed in the last 90 days. It does not come back, and without the app it is not needed."
+	mc_field explain "Data in ~/Library under the id $root, which no installed app claims. Nothing in it was read or changed in the last 90 days. It does not come back, and without the app it is not needed."
 	mc_end
 done <"$tmp/groups"

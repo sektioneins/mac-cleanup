@@ -77,7 +77,7 @@ func TestAppLeftoversDeleted(t *testing.T) {
 			t.Errorf("%s command %q lacks %s", a, it.Commands[a], dir)
 		}
 	}
-	want := "Data in ~/Library from the app com.example.gone, which no installed app claims. Nothing in it was read or changed in the last 90 days. It does not come back, and without the app it is not needed."
+	want := "Data in ~/Library under the id com.example.gone, which no installed app claims. Nothing in it was read or changed in the last 90 days. It does not come back, and without the app it is not needed."
 	if it.Explain != want {
 		t.Errorf("explain %q", it.Explain)
 	}
@@ -247,6 +247,100 @@ func TestAppLeftoversKeepsAtime(t *testing.T) {
 	}
 }
 
+func TestAppLeftoversOddByHostNames(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	real := filepath.Dir(leftoverFile(e, "Containers/com.example.gone/data", 5120))
+	by := "Preferences/ByHost/"
+	leftoverFile(e, by+"com.example.gone.H\nzz\tvictim\tq.plist", 5120)
+	leftoverFile(e, by+"com.example.gone.H\tX.plist", 5120)
+	leftoverFile(e, by+"com.example.gone.H\nzz.plist", 5120)
+	leftoverFile(e, by+"com.example.gone.A B.plist", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "com.example.gone" || len(items[0].Paths) != 1 || items[0].Paths[0] != real {
+		t.Fatalf("got %+v, want only the container of com.example.gone", items)
+	}
+	for _, it := range items {
+		for _, p := range it.Paths {
+			if !filepath.IsAbs(p) {
+				t.Errorf("relative path %q", p)
+			}
+		}
+	}
+}
+
+func TestAppLeftoversGroupWideQuiet(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	leftoverFile(e, "Containers/com.example.gone/data", 5120)
+	fresh := filepath.Join(e.Home, "Library/Preferences/com.example.gone.plist")
+	e.write(fresh, 4)
+	if items := e.run("app-leftovers"); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestAppLeftoversGroupStripsToNonID(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	leftoverFile(e, "Group Containers/ABCDE12345.group.xyz/data", 5120)
+	if items := e.run("app-leftovers"); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestAppLeftoversAllLocations(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	files := []string{
+		"HTTPStorages/com.example.gone/data",
+		"WebKit/com.example.gone/data",
+		"Application Support/com.example.gone/data",
+	}
+	for _, f := range files {
+		leftoverFile(e, f, 1024)
+	}
+	leftoverFile(e, "HTTPStorages/com.example.gone.binarycookies", 1024)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "com.example.gone" || len(items[0].Paths) != 4 {
+		t.Fatalf("got %+v, want one item with 4 paths", items)
+	}
+}
+
+func TestAppLeftoversQuotedMultiPath(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	state := filepath.Join(e.Home, "Library/Saved Application State/com.example.gone.savedState")
+	group := filepath.Join(e.Home, "Library/Group Containers/ZZZZZZZZZZ.com.example.gone")
+	leftoverFile(e, "Saved Application State/com.example.gone.savedState/data", 1024)
+	leftoverFile(e, "Group Containers/ZZZZZZZZZZ.com.example.gone/data", 1024)
+	items := e.run("app-leftovers")
+	if len(items) != 1 {
+		t.Fatalf("got %+v, want 1 item", items)
+	}
+	for _, a := range []protocol.Action{protocol.Delete, protocol.Trash} {
+		for _, p := range []string{state, group} {
+			if !strings.Contains(items[0].Commands[a], "'"+p+"'") {
+				t.Errorf("%s command %q lacks quoted %s", a, items[0].Commands[a], p)
+			}
+		}
+	}
+}
+
+func TestAppLeftoversTeamlessGroup(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	// Same vendor as an installed app (com.example): claimed.
+	leftoverFile(e, "Group Containers/group.com.example.shared/data", 5120)
+	leftoverFile(e, "Group Containers/com.Example.suite/data", 5120)
+	// Unrelated vendor: listed.
+	leftoverFile(e, "Group Containers/group.com.stranger.shared/data", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "com.stranger.shared" {
+		t.Fatalf("got %+v, want only com.stranger.shared", items)
+	}
+}
+
 // idleFolder writes a 2 MB file at ~/Library/rel/file and ages the folder
 // rel (a path under ~/Library) 400 days. It returns the file and the folder.
 func idleFolder(e *env, rel string) (string, string) {
@@ -356,6 +450,12 @@ func TestLibraryUnusedApple(t *testing.T) {
 	idleFolder(e, "Application Support/contactsd")
 	idleFolder(e, "Application Support/MobileSync")
 	idleFolder(e, "Biome")
+	for _, n := range []string{"AddressBook", "CallHistoryDB", "CloudDocs", "CrashReporter", "Knowledge", "SyncServices", "ProtectedCloudStorage", "FamilyCircle", "iLifeMediaBrowser"} {
+		idleFolder(e, "Application Support/"+n)
+	}
+	for _, n := range []string{"QuickLook", "Automator", "Image Capture", "Contextual Menu Items", "Widgets", "iTunes", "Fonts Disabled"} {
+		idleFolder(e, n)
+	}
 	if items := e.run("library-unused"); len(items) != 0 {
 		t.Fatalf("got %+v, want none", items)
 	}
