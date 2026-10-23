@@ -65,7 +65,7 @@ func TestReviewShowsControlCharactersEscaped(t *testing.T) {
 	if n := strings.Count(v, "contains control characters"); n != 1 {
 		t.Fatalf("want the note once (only on the item with control characters), got %d:\n%s", n, v)
 	}
-	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := send(press(m, "enter"), tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter did not start the run")
 	}

@@ -33,14 +33,15 @@ func pump(t *testing.T, m Model, cmd tea.Cmd) (Model, tea.Msg) {
 	return m, nil
 }
 
-// confirm selects all items of the results, opens the review and presses enter.
+// confirm selects all items of the results, opens the review and presses
+// enter twice: once to reach the run button, once to press it.
 func confirm(t *testing.T, d Deps, results ...scan.Result) (Model, tea.Cmd) {
 	t.Helper()
 	m := loaded(t, d, results...)
 	for _, it := range m.visibleItems() {
 		m.selected[it.Key()] = true
 	}
-	m = press(m, "enter")
+	m = press(m, "enter", "enter")
 	return send(m, tea.KeyMsg{Type: tea.KeyEnter})
 }
 
@@ -99,7 +100,7 @@ func TestRunUsesChosenAction(t *testing.T) {
 	it := both("rm -rf d", "mv t")
 	m := loaded(t, *d, scan.Result{Script: "s", Items: []protocol.Item{it}})
 	m.selected[it.Key()] = true
-	m = press(m, "enter", "t")
+	m = press(m, "enter", "t", "enter")
 	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	pump(t, m, cmd)
 	if len(got) != 1 || got[0] != protocol.Trash {

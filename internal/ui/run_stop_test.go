@@ -383,7 +383,7 @@ func TestCtrlCOnReviewAfterEnterDoesNotQuit(t *testing.T) {
 	for _, it := range m.visibleItems() {
 		m.selected[it.Key()] = true
 	}
-	m = press(m, "enter")
+	m = press(m, "enter", "enter")
 	m, start := send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, cmd := send(m, ctrlC)
 	if cmd != nil {

@@ -23,10 +23,27 @@ type runEntry struct {
 // startRunMsg is sent when the owner confirms the review. Task 13 handles it.
 type startRunMsg struct{ entries []runEntry }
 
+// reviewFocus is the review group that takes the arrow keys and enter; tab
+// moves to the next group.
+type reviewFocus int
+
+const (
+	focusItems reviewFocus = iota
+	focusButtons
+)
+
+type reviewButton int
+
+const (
+	buttonRun reviewButton = iota
+	buttonBack
+)
+
 // startReview opens the review for the selected items in list order.
 func (m *Model) startReview() {
 	m.revKeys, m.ract, m.notes = nil, map[string]protocol.Action{}, nil
 	m.rcurID, m.rcursor, m.revScroll = "", 0, 0
+	m.rfocus, m.rbutton = focusItems, buttonRun
 	add := func(it protocol.Item) {
 		if m.selected[it.Key()] {
 			m.revKeys = append(m.revKeys, it.Key())
@@ -144,7 +161,33 @@ func (m Model) updateReviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	if m.rfocus == focusButtons {
+		switch msg.String() {
+		case "left":
+			m.rbutton = buttonRun
+			return m, nil
+		case "right":
+			m.rbutton = buttonBack
+			return m, nil
+		case "up", "k":
+			m.rfocus = focusItems
+			return m, nil
+		case "down", "j":
+			return m, nil
+		case "enter":
+			if m.rbutton == buttonBack {
+				m.screen = screenList
+				return m, nil
+			}
+		}
+	}
 	switch msg.String() {
+	case "tab", "shift+tab":
+		if m.rfocus == focusItems {
+			m.rfocus = focusButtons
+		} else {
+			m.rfocus = focusItems
+		}
 	case "esc":
 		m.screen = screenList
 	case "up", "k":
@@ -167,6 +210,10 @@ func (m Model) updateReviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.recheck(blockedItems(items))
 	case "enter":
+		if m.rfocus == focusItems {
+			m.rfocus, m.rbutton = focusButtons, buttonRun
+			return m, nil
+		}
 		if len(items) > 0 && len(blockedItems(items)) == 0 {
 			entries := make([]runEntry, len(items))
 			for i, it := range items {
@@ -360,7 +407,7 @@ func (m Model) reviewLayoutFor() reviewLayout {
 			w = min(w, max(m.width-15-lipgloss.Width(ch), 4))
 		}
 		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
-		if i == cur {
+		if i == cur && m.rfocus == focusItems {
 			line = rev.Render(clip(line, m.width))
 		}
 		l.body = append(l.body, line)
@@ -386,12 +433,23 @@ func (m Model) reviewLayoutFor() reviewLayout {
 	for _, n := range m.notes {
 		extra = append(extra, hardWrap(Visible(n), m.width, " ", "   ")...)
 	}
-	run := "[ run ]"
+	run, back := "[ run ]", "[ back ]"
 	if blocked {
 		run = "( run: blocked )"
 	}
-	pinned := []string{clip(m.twoCol("", run+"   [ back ]  "), m.width),
-		clip("  "+faint.Render("up/down move  s skip  r re-check  enter run  esc back to list"), m.width)}
+	// The line is clipped as plain text and the focused button styled
+	// afterwards, so clipping never cuts an escape sequence.
+	buttons := clip(m.twoCol("", run+"   "+back+"  "), m.width)
+	hint := "up/down move  s skip  r re-check  enter/tab to buttons  esc back to list"
+	if m.rfocus == focusButtons {
+		focused := run
+		if m.rbutton == buttonBack {
+			focused = back
+		}
+		buttons = strings.Replace(buttons, focused, rev.Render(focused), 1)
+		hint = "←/→ choose  enter press  tab back to items  esc back to list"
+	}
+	pinned := []string{buttons, clip("  "+faint.Render(hint), m.width)}
 
 	// Warnings and notes stay pinned if at least 3 body lines fit beside them;
 	// otherwise they scroll with the body so the view never exceeds the height.

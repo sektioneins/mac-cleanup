@@ -82,6 +82,8 @@ type Model struct {
 	rcursor   int                        // review: fallback index
 	notes     []string                   // review: messages from re-checks
 	revScroll int                        // review: first visible body line
+	rfocus    reviewFocus                // review: group that has the keyboard
+	rbutton   reviewButton               // review: focused button
 	running   bool                       // review confirmed; later re-checks are ignored
 	run       runState                   // running and result screens
 

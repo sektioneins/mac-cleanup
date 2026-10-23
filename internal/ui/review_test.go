@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"mac-cleanup/internal/protocol"
 	"mac-cleanup/internal/scan"
@@ -110,7 +111,7 @@ func TestBlockedByWarning(t *testing.T) {
 	if !strings.Contains(v, "( run: blocked )") || !strings.Contains(v, "⚠ Gradle is running: quit it and press r to re-check, or s to skip") {
 		t.Fatalf("blocked view wrong:\n%s", v)
 	}
-	if _, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	if _, cmd := send(press(m, "enter"), tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
 		t.Fatal("enter ran while blocked")
 	}
 }
@@ -126,7 +127,7 @@ func TestSkipUnblocks(t *testing.T) {
 	if !strings.Contains(m.View(), "Review: 1 item") {
 		t.Fatalf("title:\n%s", m.View())
 	}
-	_, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := send(press(m, "enter"), tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter did nothing when unblocked")
 	}
@@ -267,7 +268,7 @@ func TestEnterSnapshotAndIgnoresLateRecheck(t *testing.T) {
 	a := both("del-a", "trash-a", func(it *protocol.Item) { it.Default = protocol.Trash })
 	b := item("s", "z", 4_000_000)
 	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{a, b}})
-	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := send(press(m, "enter"), tea.KeyMsg{Type: tea.KeyEnter})
 	msg, ok := cmd().(startRunMsg)
 	if !ok || len(msg.entries) != 2 {
 		t.Fatalf("got %#v", msg)
@@ -428,5 +429,99 @@ func TestHardWrapTabCountsEight(t *testing.T) {
 		if w > 20 {
 			t.Fatalf("segment %q is %d cells", s, w)
 		}
+	}
+}
+
+var tab = tea.KeyMsg{Type: tea.KeyTab}
+
+func TestTabFocusesButtons(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(prev)
+	a := both("cmd_delete", "cmd_trash")
+	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{a, item("s", "z", 4_000_000)}})
+	revRow := strings.TrimSuffix(rev.Render("> both"), "\x1b[0m")
+	if v := m.View(); strings.Contains(v, rev.Render("[ run ]")) || !strings.Contains(v, revRow) {
+		t.Fatalf("items should have focus:\n%s", v)
+	}
+	m, _ = send(m, tab)
+	v := m.View()
+	if !strings.Contains(v, rev.Render("[ run ]")) || strings.Contains(v, revRow) || !strings.Contains(v, "> both") {
+		t.Fatalf("run button should have focus, cursor row only marked:\n%s", v)
+	}
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
+	v = m.View()
+	if !strings.Contains(v, rev.Render("[ back ]")) || strings.Contains(v, rev.Render("[ run ]")) || !strings.Contains(v, "cmd_delete") {
+		t.Fatalf("right should move to back and leave the action alone:\n%s", v)
+	}
+	m = press(m, "down")
+	if m.reviewIndex(m.reviewItems()) != 0 {
+		t.Fatal("down moved the hidden item cursor")
+	}
+	m, _ = send(m, tab)
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
+	if !strings.Contains(m.View(), "cmd_trash") {
+		t.Fatal("tab did not give the items the arrow keys back")
+	}
+}
+
+func TestBackButton(t *testing.T) {
+	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
+	m, _ = send(m, tab)
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.screen != screenList || m.running {
+		t.Fatalf("back did not return to the list: screen=%v", m.screen)
+	}
+	if n, _ := m.selectedTotals(); n != 1 {
+		t.Fatalf("selected %d, want 1", n)
+	}
+	m = press(m, "enter")
+	if m.rfocus != focusItems || m.rbutton != buttonRun {
+		t.Fatal("focus not reset on a new review")
+	}
+}
+
+func TestRunButton(t *testing.T) {
+	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
+	m, _ = send(m, tab)
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyLeft})
+	_, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("run button did nothing")
+	}
+	if _, ok := cmd().(startRunMsg); !ok {
+		t.Fatalf("run button emitted %T", cmd())
+	}
+}
+
+func TestRunButtonBlocked(t *testing.T) {
+	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}})
+	m, _ = send(m, tab)
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.screen != screenReview {
+		t.Fatal("blocked run button did something")
+	}
+	m = press(m, "up")
+	if m.rfocus != focusItems {
+		t.Fatal("up did not return to the items")
+	}
+}
+
+func TestEnterOnItemsJumpsToRun(t *testing.T) {
+	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
+	m, _ = send(m, tab)
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
+	m, _ = send(m, tab)
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || m.screen != screenReview {
+		t.Fatal("enter on the items must not run")
+	}
+	if m.rfocus != focusButtons || m.rbutton != buttonRun {
+		t.Fatalf("focus=%v button=%v, want the run button", m.rfocus, m.rbutton)
+	}
+	if _, cmd = send(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Fatal("second enter did not run")
 	}
 }
