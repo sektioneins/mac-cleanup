@@ -63,7 +63,9 @@ type Model struct {
 
 	selected map[string]bool
 	screen   screen
-	cursor   int // list screen: index into navigable rows
+	cursor   int    // list screen: index into navigable rows (fallback)
+	curID    string // identity of the row under the cursor
+	vcurID   string // identity of the item under the view cursor
 	view     string
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
@@ -94,6 +96,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case scanMsg:
+		m.pinCursors()
 		m.results = append(m.results, scan.Result(msg))
 	case freeMsg:
 		m.free, m.hasFree = msg, true

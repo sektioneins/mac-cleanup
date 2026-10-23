@@ -84,7 +84,7 @@ func TestToggleSelection(t *testing.T) {
 		item("a", "big", 3_000_000_000), item("a", "mid", 2_000_000_000)}})
 	m = press(m, "space")
 	v := m.View()
-	if !strings.Contains(v, "selected: 1 items, 3 GB") || !strings.Contains(v, "[x] big") {
+	if !strings.Contains(v, "selected: 1 item, 3 GB") || !strings.Contains(v, "[x] big") {
 		t.Fatalf("not selected:\n%s", v)
 	}
 	m = press(m, "space")
@@ -234,12 +234,81 @@ func TestViewOpenSelectBack(t *testing.T) {
 	}
 	m = press(m, "esc")
 	v = m.View()
-	if m.screen != screenList || !strings.Contains(v, "selected: 1 items, 2.4 GB") {
+	if m.screen != screenList || !strings.Contains(v, "selected: 1 item, 2.4 GB") {
 		t.Fatalf("back on list wrong:\n%s", v)
 	}
 	// The cursor is still on the view row, so enter reopens the view.
 	m = press(m, "enter")
 	if m.screen != screenView {
 		t.Fatal("enter on view row should open the view")
+	}
+}
+
+func TestCursorFollowsRowOnRescan(t *testing.T) {
+	d, _ := fakeDeps()
+	m := New([]string{"a", "b"}, *d)
+	m, _ = send(m, scanMsg(scan.Result{Script: "a", Items: []protocol.Item{
+		item("a", "top", 5_000_000_000), item("a", "x", 3_000_000_000)}}))
+	m = press(m, "down")
+	m, _ = send(m, scanMsg(scan.Result{Script: "b", Items: []protocol.Item{item("b", "new", 9_000_000_000)}}))
+	m = press(m, "space")
+	v := m.View()
+	if !strings.Contains(v, "[x] x") || strings.Contains(v, "[x] new") || !strings.Contains(v, "selected: 1 item,") {
+		t.Fatalf("space hit the wrong row:\n%s", v)
+	}
+}
+
+func TestViewCursorFollowsRowOnRescan(t *testing.T) {
+	d, _ := fakeDeps()
+	v := func(i *protocol.Item) { i.View = "V" }
+	m := New([]string{"a", "b"}, *d)
+	m, _ = send(m, scanMsg(scan.Result{Script: "a", Items: []protocol.Item{
+		item("a", "first", 5_000_000_000, v), item("a", "second", 3_000_000_000, v)}}))
+	m = press(m, "enter", "down")
+	m, _ = send(m, scanMsg(scan.Result{Script: "b", Items: []protocol.Item{item("b", "new", 9_000_000_000, v)}}))
+	m = press(m, "space")
+	out := m.View()
+	if !strings.Contains(out, "[x] second") || strings.Contains(out, "[x] new") {
+		t.Fatalf("wrong row selected:\n%s", out)
+	}
+}
+
+func TestLongExplanationWrapped(t *testing.T) {
+	d, _ := fakeDeps()
+	long := strings.Repeat("Downloaded build dependencies are fetched again. ", 3) + "Stop gradle daemons first."
+	m := loaded(t, *d, scan.Result{Script: "a", Items: []protocol.Item{
+		item("a", "g", 3_000_000_000, func(i *protocol.Item) { i.Explain = long })}})
+	if v := m.View(); !strings.Contains(v, "gradle daemons first.") {
+		t.Fatalf("end of explanation lost:\n%s", v)
+	}
+}
+
+func TestPlurals(t *testing.T) {
+	d, _ := fakeDeps()
+	m := loaded(t, *d, scan.Result{Script: "a", Items: []protocol.Item{
+		item("a", "one", 3_000_000_000, func(i *protocol.Item) { i.View = "V" })}})
+	if !strings.Contains(m.View(), "(1 folder)") {
+		t.Fatalf("folder plural:\n%s", m.View())
+	}
+	m = loaded(t, *d, scan.Result{Script: "a", Items: []protocol.Item{
+		item("a", "x", 3_000_000_000), item("a", "y", 2_000_000_000)}})
+	m = press(m, "space", "down", "space")
+	if !strings.Contains(m.View(), "selected: 2 items,") {
+		t.Fatal("2 items")
+	}
+}
+
+func TestScanFailureStaysVisibleWhenScrolled(t *testing.T) {
+	d, _ := fakeDeps()
+	var items []protocol.Item
+	for i := 0; i < 40; i++ {
+		items = append(items, item("a", "item"+itoa(i), int64(40-i)*100_000_000))
+	}
+	m := New([]string{"a", "bad"}, *d)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 20})
+	m, _ = send(m, scanMsg(scan.Result{Script: "a", Items: items}))
+	m, _ = send(m, scanMsg(scan.Result{Script: "bad", Err: errors.New("nope")}))
+	if v := m.View(); !strings.Contains(v, "scan failed: bad: nope") {
+		t.Fatalf("failure hidden:\n%s", v)
 	}
 }

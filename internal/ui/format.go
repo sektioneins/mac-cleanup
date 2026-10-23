@@ -51,6 +51,42 @@ func fit(s string, w int) string {
 	return string(r) + strings.Repeat(" ", w-lipgloss.Width(string(r)))
 }
 
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return itoa(n) + " " + noun + "s"
+}
+
+// wrap word-wraps s to width w and returns at most maxLines lines; if the
+// text is longer, the last line ends in an ellipsis.
+func wrap(s string, w, maxLines int) []string {
+	var lines []string
+	cur := ""
+	for _, word := range strings.Fields(s) {
+		switch {
+		case cur == "":
+			cur = word
+		case lipgloss.Width(cur)+1+lipgloss.Width(word) <= w:
+			cur += " " + word
+		default:
+			lines = append(lines, cur)
+			cur = word
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines[maxLines-1] = strings.TrimRight(fit(lines[maxLines-1], w-1), " ") + "…"
+	}
+	for i, l := range lines {
+		lines[i] = fit(l, w)
+	}
+	return lines
+}
+
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	return line

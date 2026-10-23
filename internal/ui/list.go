@@ -111,29 +111,76 @@ func (m Model) navRows() []row {
 	return out
 }
 
+func rowID(r row) string {
+	if r.view != "" {
+		return "view\x00" + r.category + "\x00" + r.view
+	}
+	return r.item.Key()
+}
+
+// listIndex resolves the cursor to an index in rows: the remembered row if it
+// still exists, otherwise the old index clamped.
+func (m Model) listIndex(rows []row) int {
+	for i, r := range rows {
+		if m.curID != "" && rowID(r) == m.curID {
+			return i
+		}
+	}
+	return min(m.cursor, max(len(rows)-1, 0))
+}
+
+func (m Model) viewIndex(items []protocol.Item) int {
+	for i, it := range items {
+		if m.vcurID != "" && it.Key() == m.vcurID {
+			return i
+		}
+	}
+	return min(m.vcursor, max(len(items)-1, 0))
+}
+
+// pinCursors fixes both cursors to the rows they are on now, so that a later
+// re-sort of the lists (new scan results) does not move them.
+func (m *Model) pinCursors() {
+	if rows := m.navRows(); len(rows) > 0 {
+		m.cursor = m.listIndex(rows)
+		m.curID = rowID(rows[m.cursor])
+	}
+	if items := m.viewItems(m.view, m.viewCat); len(items) > 0 {
+		m.vcursor = m.viewIndex(items)
+		m.vcurID = items[m.vcursor].Key()
+	}
+}
+
+func (m *Model) setListCursor(rows []row, i int) {
+	m.cursor = i
+	if i < len(rows) {
+		m.curID = rowID(rows[i])
+	}
+}
+
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.navRows()
-	if m.cursor >= len(rows) {
-		m.cursor = max(len(rows)-1, 0)
-	}
+	cur := m.listIndex(rows)
+	m.setListCursor(rows, cur)
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
 	case "up", "k":
-		m.cursor = max(m.cursor-1, 0)
+		m.setListCursor(rows, max(cur-1, 0))
 	case "down", "j":
-		m.cursor = min(m.cursor+1, max(len(rows)-1, 0))
+		m.setListCursor(rows, min(cur+1, max(len(rows)-1, 0)))
 	case " ", "space":
-		if len(rows) > 0 && rows[m.cursor].view == "" {
-			m.toggle(rows[m.cursor].item)
+		if len(rows) > 0 && rows[cur].view == "" {
+			m.toggle(rows[cur].item)
 		}
 	case "o":
-		if len(rows) > 0 && len(rows[m.cursor].item.Paths) > 0 {
-			_ = m.deps.Reveal(rows[m.cursor].item.Paths[0])
+		if len(rows) > 0 && len(rows[cur].item.Paths) > 0 {
+			_ = m.deps.Reveal(rows[cur].item.Paths[0])
 		}
 	case "enter":
-		if len(rows) > 0 && rows[m.cursor].view != "" {
-			m.screen, m.view, m.viewCat, m.vcursor = screenView, rows[m.cursor].view, rows[m.cursor].category, 0
+		if len(rows) > 0 && rows[cur].view != "" {
+			m.screen, m.view, m.viewCat = screenView, rows[cur].view, rows[cur].category
+			m.vcursor, m.vcurID = 0, ""
 		} else if n, _ := m.selectedTotals(); n > 0 {
 			m.screen = screenReview
 		}
@@ -151,20 +198,28 @@ func (m Model) toggle(it protocol.Item) {
 
 func (m Model) updateView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	items := m.viewItems(m.view, m.viewCat)
+	cur := m.viewIndex(items)
+	setCur := func(i int) {
+		m.vcursor = i
+		if i < len(items) {
+			m.vcurID = items[i].Key()
+		}
+	}
+	setCur(cur)
 	switch msg.String() {
 	case "esc":
 		m.screen = screenList
 	case "up", "k":
-		m.vcursor = max(m.vcursor-1, 0)
+		setCur(max(cur-1, 0))
 	case "down", "j":
-		m.vcursor = min(m.vcursor+1, max(len(items)-1, 0))
+		setCur(min(cur+1, max(len(items)-1, 0)))
 	case " ", "space":
-		if m.vcursor < len(items) {
-			m.toggle(items[m.vcursor])
+		if cur < len(items) {
+			m.toggle(items[cur])
 		}
 	case "o":
-		if m.vcursor < len(items) && len(items[m.vcursor].Paths) > 0 {
-			_ = m.deps.Reveal(items[m.vcursor].Paths[0])
+		if cur < len(items) && len(items[cur].Paths) > 0 {
+			_ = m.deps.Reveal(items[cur].Paths[0])
 		}
 	}
 	return m, nil
@@ -200,7 +255,7 @@ func checkbox(on bool) string {
 
 func (m Model) listScreen() string {
 	rows := m.navRows()
-	cursor := min(m.cursor, max(len(rows)-1, 0))
+	cursor := m.listIndex(rows)
 
 	var body []string
 	curLine := 0
@@ -213,9 +268,6 @@ func (m Model) listScreen() string {
 			body = append(body, m.rowLine(r, len(rows) > 0 && sameRow(r, rows[cursor])))
 		}
 	}
-	for _, f := range m.scanFailures() {
-		body = append(body, "scan failed: "+f.Script+": "+firstLine(f.Err.Error()))
-	}
 
 	head := []string{
 		m.twoCol(" "+bold.Render("mac-cleanup"), m.freeText()+" "),
@@ -226,15 +278,19 @@ func (m Model) listScreen() string {
 	}
 	head = append(head, m.rule())
 
-	detail := []string{"", "", ""}
+	detail := make([]string, detailLines)
 	if len(rows) > 0 {
 		detail = m.detail(rows[cursor])
 	}
 	n, size := m.selectedTotals()
-	foot := []string{m.rule()}
+	var foot []string
+	for _, f := range m.scanFailures() {
+		foot = append(foot, "scan failed: "+f.Script+": "+firstLine(f.Err.Error()))
+	}
+	foot = append(foot, m.rule())
 	foot = append(foot, detail...)
 	foot = append(foot, m.rule(),
-		"  selected: "+itoa(n)+" items, "+HumanSize(size)+"   "+faint.Render("space select  o finder  enter review/open  q quit"))
+		"  selected: "+plural(n, "item")+", "+HumanSize(size)+"   "+faint.Render("space select  o finder  enter review/open  q quit"))
 
 	return strings.Join(m.frame(head, body, foot, curLine), "\n")
 }
@@ -260,7 +316,7 @@ func (m Model) rowLine(r row, cur bool) string {
 		mark = "> "
 	}
 	if r.view != "" {
-		return mark + "    " + r.view + "  (" + itoa(r.count) + " folders)  " + HumanSize(r.size) + "  enter to open"
+		return mark + "    " + r.view + "  (" + plural(r.count, "folder") + ")  " + HumanSize(r.size) + "  enter to open"
 	}
 	it := r.item
 	tail := "  " + gradeLabel(it.Grade)
@@ -280,21 +336,28 @@ func padLeft(s string, w int) string {
 	return strings.Repeat(" ", max(w-lipgloss.Width(s), 0)) + s
 }
 
-// detail is the three-line pane for the row under the cursor.
+// detailLines is the fixed height of the detail pane.
+const detailLines = 4
+
+// detail is the pane for the row under the cursor: name and path, then the
+// explanation word-wrapped over the remaining lines.
 func (m Model) detail(r row) []string {
+	out := make([]string, detailLines)
 	if r.view != "" {
-		return []string{"  " + bold.Render(r.view), "  " + itoa(r.count) + " folders, press enter to choose among them.", ""}
+		out[0] = "  " + bold.Render(r.view)
+		out[1] = "  " + plural(r.count, "folder") + ", press enter to choose among them."
+		return out
 	}
 	it := r.item
 	path := ""
 	if len(it.Paths) > 0 {
 		path = "   " + it.Paths[0]
 	}
-	return []string{
-		"  " + bold.Render(it.Name) + path,
-		"  " + fit(firstLine(it.Explain), m.width-2),
-		"",
+	out[0] = "  " + bold.Render(it.Name) + path
+	for i, l := range wrap(it.Explain, m.width-2, detailLines-1) {
+		out[i+1] = "  " + l
 	}
+	return out
 }
 
 func (m Model) viewScreen() string {
@@ -307,7 +370,7 @@ func (m Model) viewScreen() string {
 			selSize += it.Size
 		}
 	}
-	cur := min(m.vcursor, max(len(items)-1, 0))
+	cur := m.viewIndex(items)
 	var body []string
 	for i, it := range items {
 		mark := "  "
@@ -325,7 +388,7 @@ func (m Model) viewScreen() string {
 		m.twoCol(" "+bold.Render(m.view), "selected: "+itoa(selN)+" of "+itoa(len(items))+", "+HumanSize(selSize)+" "),
 		m.rule(),
 	}
-	detail := []string{"", "", ""}
+	detail := make([]string, detailLines)
 	if len(items) > 0 {
 		detail = m.detail(row{item: items[cur]})
 	}
