@@ -436,3 +436,16 @@ func TestLibraryUnusedKeepsAtime(t *testing.T) {
 		t.Errorf("atime changed from %v to %v", before, after)
 	}
 }
+
+func TestLibraryUnusedOddNames(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e)
+	_, real := idleFolder(e, "Application Support/Real Folder")
+	idleFolder(e, "Application Support/Tab\tName")
+	idleFolder(e, "Application Support/New\nLine")
+	idleFolder(e, "Application Support/X\nas\tn\t"+real)
+	items := e.run("library-unused")
+	if len(items) != 1 || items[0].ID != "as/Real Folder" || len(items[0].Paths) != 1 || items[0].Paths[0] != real {
+		t.Fatalf("got %+v, want only as/Real Folder", items)
+	}
+}

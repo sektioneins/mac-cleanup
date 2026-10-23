@@ -34,6 +34,10 @@ done
 for p in "$lib/Application Support"/* "$lib"/*; do
 	[ -d "$p" ] && [ ! -L "$p" ] || continue
 	name=${p##*/}
+	# Names with a tab or newline would corrupt the TAB separated list.
+	case $name in
+	*$'\t'* | *$'\n'*) continue ;;
+	esac
 	mc_is_bundle_id "$name" && continue
 	case $p in
 	"$lib/Application Support"/*) kind=as ;;
