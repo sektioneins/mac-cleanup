@@ -51,6 +51,8 @@ const (
 	screenList screen = iota
 	screenView
 	screenReview
+	screenRun
+	screenResult
 )
 
 // Model is the whole UI state.
@@ -77,6 +79,7 @@ type Model struct {
 	notes     []string                   // review: messages from re-checks
 	revScroll int                        // review: first visible body line
 	running   bool                       // review confirmed; later re-checks are ignored
+	run       runState                   // running and result screens
 
 	width, height int
 }
@@ -112,6 +115,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case freeMsg:
 		m.free, m.hasFree = msg, true
+	case startRunMsg:
+		return m.startRun(msg)
+	case sudoMsg:
+		return m.afterSudo(msg)
+	case outcomeMsg:
+		return m.afterOutcome(msg)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -123,6 +132,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateView(msg)
 		case screenReview:
 			return m.updateReview(msg)
+		case screenRun:
+			return m, nil
+		case screenResult:
+			return m.updateResult(msg)
 		}
 	}
 	return m, nil
@@ -134,6 +147,10 @@ func (m Model) View() string {
 		return m.viewScreen()
 	case screenReview:
 		return m.reviewScreen()
+	case screenRun:
+		return m.runScreen()
+	case screenResult:
+		return m.resultScreen()
 	}
 	return m.listScreen()
 }
