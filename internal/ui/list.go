@@ -182,7 +182,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen, m.view, m.viewCat = screenView, rows[cur].view, rows[cur].category
 			m.vcursor, m.vcurID = 0, ""
 		} else if n, _ := m.selectedTotals(); n > 0 {
-			m.screen = screenReview
+			m.startReview()
 		}
 	}
 	return m, nil

@@ -50,7 +50,7 @@ type screen int
 const (
 	screenList screen = iota
 	screenView
-	screenReview // Task 12 fills this in
+	screenReview
 )
 
 // Model is the whole UI state.
@@ -69,6 +69,12 @@ type Model struct {
 	view     string
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
+
+	rev     []string                   // review: item keys in list order
+	ract    map[string]protocol.Action // review: chosen action per key
+	rcurID  string                     // review: key of the item under the cursor
+	rcursor int                        // review: fallback index
+	notes   []string                   // review: messages from re-checks
 
 	width, height int
 }
@@ -98,6 +104,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanMsg:
 		m.pinCursors()
 		m.results = append(m.results, scan.Result(msg))
+	case recheckMsg:
+		m.applyRecheck(scan.Result(msg))
 	case freeMsg:
 		m.free, m.hasFree = msg, true
 	case tea.KeyMsg:
@@ -109,6 +117,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateList(msg)
 		case screenView:
 			return m.updateView(msg)
+		case screenReview:
+			return m.updateReview(msg)
 		}
 	}
 	return m, nil
@@ -122,12 +132,6 @@ func (m Model) View() string {
 		return m.reviewScreen()
 	}
 	return m.listScreen()
-}
-
-// reviewScreen is a placeholder until Task 12.
-func (m Model) reviewScreen() string {
-	n, size := m.selectedTotals()
-	return "Review: " + itoa(n) + " items, " + HumanSize(size)
 }
 
 // visibleItems returns all listed items (at least MinSize).
