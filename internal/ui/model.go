@@ -70,12 +70,13 @@ type Model struct {
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
 
-	revKeys []string                   // review: item keys in list order
-	ract    map[string]protocol.Action // review: chosen action per key
-	rcurID  string                     // review: key of the item under the cursor
-	rcursor int                        // review: fallback index
-	notes   []string                   // review: messages from re-checks
-	running bool                       // review confirmed; later re-checks are ignored
+	revKeys   []string                   // review: item keys in list order
+	ract      map[string]protocol.Action // review: chosen action per key
+	rcurID    string                     // review: key of the item under the cursor
+	rcursor   int                        // review: fallback index
+	notes     []string                   // review: messages from re-checks
+	revScroll int                        // review: first visible body line
+	running   bool                       // review confirmed; later re-checks are ignored
 
 	width, height int
 }

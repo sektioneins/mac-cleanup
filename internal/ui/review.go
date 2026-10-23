@@ -26,7 +26,7 @@ type startRunMsg struct{ entries []runEntry }
 // startReview opens the review for the selected items in list order.
 func (m *Model) startReview() {
 	m.revKeys, m.ract, m.notes = nil, map[string]protocol.Action{}, nil
-	m.rcurID, m.rcursor = "", 0
+	m.rcurID, m.rcursor, m.revScroll = "", 0, 0
 	add := func(it protocol.Item) {
 		if m.selected[it.Key()] {
 			m.revKeys = append(m.revKeys, it.Key())
@@ -97,6 +97,25 @@ func (m Model) updateReview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.running {
 		return m, nil
 	}
+	switch msg.String() {
+	case "pgdown", "pgup":
+		l := m.reviewLayoutFor()
+		d := max(l.room, 1)
+		if msg.String() == "pgup" {
+			d = -d
+		}
+		m.revScroll = l.clamp(m.revScroll + d)
+		return m, nil
+	}
+	nm, cmd := m.updateReviewKey(msg)
+	if mm := nm.(Model); mm.screen == screenReview {
+		mm.revScroll = mm.reviewLayoutFor().ensureVisible(mm.revScroll)
+		return mm, cmd
+	}
+	return nm, cmd
+}
+
+func (m Model) updateReviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	items := m.reviewItems()
 	cur := m.reviewIndex(items)
 	setCur := func(i int) {
@@ -257,7 +276,7 @@ func hardWrap(s string, w int, first, cont string) []string {
 			first, cur, curW, limit = cont, "", 0, cw
 		}
 		for _, r := range line {
-			rw := lipgloss.Width(string(r))
+			rw := cellW(r)
 			if curW+rw > limit && cur != "" {
 				flush()
 			}
@@ -269,16 +288,29 @@ func hardWrap(s string, w int, first, cont string) []string {
 	return out
 }
 
+// cellW is the display width of r; a tab counts as 8 cells (worst case).
+func cellW(r rune) int {
+	if r == '\t' {
+		return 8
+	}
+	return lipgloss.Width(string(r))
+}
+
 // clip cuts s to at most w display cells (w <= 0: unchanged).
 func clip(s string, w int) string {
 	if w <= 0 || lipgloss.Width(s) <= w {
 		return s
 	}
-	r := []rune(s)
-	for lipgloss.Width(string(r)) > w {
-		r = r[:len(r)-1]
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		if used+cellW(r) > w {
+			break
+		}
+		b.WriteRune(r)
+		used += cellW(r)
 	}
-	return string(r)
+	return b.String()
 }
 
 const (
@@ -286,7 +318,18 @@ const (
 	cmdCont  = "     "
 )
 
-func (m Model) reviewScreen() string {
+// reviewLayout is the review screen split into a pinned title, a scrollable
+// body, and a pinned footer. cs and ce are the body lines of the cursor
+// item's row and the end of its block; room is how many body lines are
+// shown at once (len(body) when everything fits or height is unlimited).
+type reviewLayout struct {
+	title, foot []string
+	body        []string
+	cs, ce      int
+	room        int
+}
+
+func (m Model) reviewLayoutFor() reviewLayout {
 	items := m.reviewItems()
 	cur := m.reviewIndex(items)
 	var size int64
@@ -298,90 +341,103 @@ func (m Model) reviewScreen() string {
 		title = m.twoCol(title, hint)
 	}
 
-	var body, foot []string
-	cs, ce := 0, 0
+	var l reviewLayout
+	l.title = []string{title}
+	nameW := 0
+	for _, o := range items {
+		nameW = max(nameW, lipgloss.Width(o.Name))
+	}
+	var warns []string
 	for i, it := range items {
 		mark := "  "
 		if i == cur {
 			mark = "> "
-			cs = len(body)
+			l.cs = len(l.body)
 		}
 		ch := m.choices(it)
-		nameW := 0
-		for _, o := range items {
-			nameW = max(nameW, lipgloss.Width(o.Name))
-		}
+		w := nameW
 		if m.width > 0 {
-			nameW = min(nameW, max(m.width-15-lipgloss.Width(ch), 4))
+			w = min(w, max(m.width-15-lipgloss.Width(ch), 4))
 		}
-		line := mark + fit(it.Name, max(nameW, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
+		line := mark + fit(it.Name, max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
 		if i == cur {
 			line = rev.Render(clip(line, m.width))
 		}
-		body = append(body, line)
-		body = append(body, hardWrap(it.Commands[m.chosen(it)], m.width, cmdFirst, cmdCont)...)
+		l.body = append(l.body, line)
+		l.body = append(l.body, hardWrap(it.Commands[m.chosen(it)], m.width, cmdFirst, cmdCont)...)
 		if it.Admin {
-			body = append(body, cmdFirst+"(admin password)")
+			l.body = append(l.body, cmdFirst+"(admin password)")
 		}
 		if i == cur {
-			ce = len(body) - 1
+			l.ce = len(l.body) - 1
 		}
 		for _, w := range it.Warnings {
-			foot = append(foot, hardWrap("⚠ "+w+": quit it and press r to re-check, or s to skip", m.width, " ", "   ")...)
+			warns = append(warns, hardWrap("⚠ "+w+": quit it and press r to re-check, or s to skip", m.width, " ", "   ")...)
 		}
 	}
 	if len(items) == 0 {
-		body = append(body, "  nothing left to review")
+		l.body = append(l.body, "  nothing left to review")
 	}
-	blocked := len(items) == 0 || len(foot) > 0
+	blocked := len(items) == 0 || len(warns) > 0
+	extra := warns
 	for _, n := range m.notes {
-		foot = append(foot, hardWrap(n, m.width, " ", "   ")...)
+		extra = append(extra, hardWrap(n, m.width, " ", "   ")...)
 	}
 	run := "[ run ]"
 	if blocked {
 		run = "( run: blocked )"
 	}
-	foot = append(foot, clip(m.twoCol("", run+"   [ back ]  "), m.width),
-		clip("  "+faint.Render("up/down move  s skip  r re-check  enter run  esc back to list"), m.width))
+	pinned := []string{clip(m.twoCol("", run+"   [ back ]  "), m.width),
+		clip("  "+faint.Render("up/down move  s skip  r re-check  enter run  esc back to list"), m.width)}
 
-	out := []string{title}
-	if m.height > 0 {
-		body = window(body, cs, ce, max(m.height-1-len(foot), 3))
+	// Warnings and notes stay pinned if at least 3 body lines fit beside them;
+	// otherwise they scroll with the body so the view never exceeds the height.
+	if m.height > 0 && m.height-len(l.title)-len(extra)-len(pinned) < 3 {
+		if len(extra) > 0 {
+			l.body = append(l.body, extra...)
+		}
+		extra = nil
 	}
-	out = append(out, body...)
-	return strings.Join(append(out, foot...), "\n")
+	l.foot = append(extra, pinned...)
+	l.room = len(l.body)
+	if m.height > 0 {
+		avail := max(m.height-len(l.title)-len(l.foot), 1)
+		if len(l.body) > avail {
+			l.room = max(avail-2, 1) // two lines reserved for the more markers
+		}
+	}
+	return l
 }
 
-// window shows avail lines of body that include lines cs..ce (the cursor's
-// block, as far as it fits) and marks hidden content with arrows.
-func window(body []string, cs, ce, avail int) []string {
-	if len(body) <= avail {
-		return body
+func (l reviewLayout) clamp(scroll int) int {
+	return max(min(scroll, len(l.body)-l.room), 0)
+}
+
+// ensureVisible moves scroll just enough to show the cursor item's block, or
+// at least its row if the block is taller than the room.
+func (l reviewLayout) ensureVisible(scroll int) int {
+	scroll = l.clamp(scroll)
+	if l.ce-l.cs+1 <= l.room {
+		scroll = min(max(scroll, l.ce-l.room+1), l.cs)
+	} else if scroll > l.cs || scroll+l.room <= l.cs {
+		scroll = l.cs
 	}
-	start, end := 0, 0
-	room := avail
-	for range 3 {
-		start = max(0, min(cs, ce-room+1))
-		end = min(start+room, len(body))
-		room = avail
-		if start > 0 {
-			room--
-		}
-		if end < len(body) {
-			room--
-		}
-	}
-	start = max(0, min(cs, ce-room+1))
-	end = min(start+room, len(body))
-	var out []string
+	return l.clamp(scroll)
+}
+
+func (m Model) reviewScreen() string {
+	l := m.reviewLayoutFor()
+	start := l.clamp(m.revScroll)
+	end := min(start+l.room, len(l.body))
+	out := append([]string{}, l.title...)
 	if start > 0 {
-		out = append(out, faint.Render("  ↑ more"))
+		out = append(out, faint.Render("  ↑ more (pgup)"))
 	}
-	out = append(out, body[start:end]...)
-	if end < len(body) {
-		out = append(out, faint.Render("  ↓ more"))
+	out = append(out, l.body[start:end]...)
+	if end < len(l.body) {
+		out = append(out, faint.Render("  ↓ more (pgdn)"))
 	}
-	return out
+	return strings.Join(append(out, l.foot...), "\n")
 }
 
 // choices renders the action radio for one item; a single action has no choice.

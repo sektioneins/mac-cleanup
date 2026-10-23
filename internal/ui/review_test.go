@@ -336,3 +336,97 @@ func TestRecheckOnlyWarnedScripts(t *testing.T) {
 func warned1(script, id string) protocol.Item {
 	return item(script, id, 9_000_000, func(it *protocol.Item) { it.Warnings = []string{"busy"} })
 }
+
+func visibleSet(m Model, set map[string]bool) {
+	for _, l := range strings.Split(m.View(), "\n") {
+		set[l] = true
+	}
+}
+
+func TestTallBlockTailReachable(t *testing.T) {
+	long := strings.Repeat("0123456789", 15) // 150 chars
+	mk := func(id string) protocol.Item {
+		return item("s", id, 5_000_000, func(it *protocol.Item) {
+			it.Admin = true
+			it.Commands = map[protocol.Action]string{protocol.Delete: "sudo rm " + long + id}
+		})
+	}
+	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{mk("a"), mk("b")}})
+	m, _ = send(m, tea.WindowSizeMsg{Width: 40, Height: 10})
+	m = press(m, "down")
+	m.revScroll = 0
+	seen := map[string]bool{}
+	for i := 0; i < 30; i++ {
+		if n := len(strings.Split(m.View(), "\n")); n > 10 {
+			t.Fatalf("%d lines", n)
+		}
+		visibleSet(m, seen)
+		prev := m.revScroll
+		m, _ = send(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		if m.revScroll == prev {
+			break
+		}
+	}
+	for _, l := range m.reviewLayoutFor().body {
+		if !seen[l] {
+			t.Fatalf("body line %q never visible", l)
+		}
+	}
+	v := m.View()
+	if !strings.HasSuffix(strings.Split(v, "\n")[len(strings.Split(v, "\n"))-3], "(admin password)") || !strings.Contains(v, "↑ more (pgup)") {
+		t.Fatalf("end not shown:\n%s", v)
+	}
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.revScroll == 0 && len(m.reviewLayoutFor().body) > m.reviewLayoutFor().room*2 {
+		t.Fatal("pgup jumped too far")
+	}
+}
+
+func TestSmallHeightPinnedFooterOverflow(t *testing.T) {
+	var items []protocol.Item
+	for i := 0; i < 4; i++ {
+		id := string(rune('a' + i))
+		items = append(items, item("s", id, int64(9_000_000-i), func(it *protocol.Item) {
+			it.Warnings = []string{"busy-" + id}
+		}))
+	}
+	m := reviewing(t, scan.Result{Script: "s", Items: items})
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 6})
+	seen := map[string]bool{}
+	for i := 0; i < 30; i++ {
+		if n := len(strings.Split(m.View(), "\n")); n > 6 {
+			t.Fatalf("%d lines:\n%s", n, m.View())
+		}
+		visibleSet(m, seen)
+		prev := m.revScroll
+		m, _ = send(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		if m.revScroll == prev {
+			break
+		}
+	}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		found := false
+		for l := range seen {
+			found = found || strings.Contains(l, "⚠ busy-"+id+": quit it")
+		}
+		if !found {
+			t.Fatalf("warning %s unreachable", id)
+		}
+	}
+}
+
+func TestHardWrapTabCountsEight(t *testing.T) {
+	segs := hardWrap("a\tb\tc\td", 20, "", "")
+	if strings.Join(segs, "") != "a\tb\tc\td" {
+		t.Fatalf("lossy: %q", segs)
+	}
+	for _, s := range segs {
+		w := 0
+		for _, r := range s {
+			w += cellW(r)
+		}
+		if w > 20 {
+			t.Fatalf("segment %q is %d cells", s, w)
+		}
+	}
+}
