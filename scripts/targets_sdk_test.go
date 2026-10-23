@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,7 @@ func TestJavaVersions(t *testing.T) {
 	base := filepath.Join(e.Root, "Library/Java/JavaVirtualMachines")
 	e.write(filepath.Join(base, "temurin-17.jdk/Contents/Home/bin/java"), 32)
 	e.write(filepath.Join(base, "zulu-21.jdk/Contents/Home/bin/java"), 32)
+	e.tool("java", "exit 1")
 	items := e.run("java-versions")
 	if len(items) != 2 {
 		t.Fatalf("got %d items, want 2", len(items))
@@ -93,5 +95,59 @@ func TestJavaAbsent(t *testing.T) {
 	e := newEnv(t)
 	if items := e.run("java-versions"); len(items) != 0 {
 		t.Fatalf("got %d items, want 0", len(items))
+	}
+}
+
+const javaActiveSentence = "This is the Java version the java command currently uses."
+
+func twoJDKs(e *env) string {
+	base := filepath.Join(e.Root, "Library/Java/JavaVirtualMachines")
+	e.write(filepath.Join(base, "a.jdk/Contents/Home/bin/java"), 32)
+	e.write(filepath.Join(base, "b.jdk/Contents/Home/bin/java"), 32)
+	return base
+}
+
+func TestJavaActive(t *testing.T) {
+	e := newEnv(t)
+	base := twoJDKs(e)
+	e.tool("java", "echo '    java.home = "+base+"/b.jdk/Contents/Home' >&2")
+	items := e.run("java-versions")
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	a, b := items[0], items[1]
+	if a.ID != "a" || a.Name != "a" || strings.Contains(a.Explain, javaActiveSentence) {
+		t.Errorf("a should be unchanged: %+v", a)
+	}
+	if b.ID != "b" || b.Name != "b (active)" || !strings.Contains(b.Explain, javaActiveSentence) {
+		t.Errorf("b should be active: %+v", b)
+	}
+	if b.Grade != protocol.MayNeed || b.Default != protocol.Trash {
+		t.Errorf("active item changed grade/default: %+v", b)
+	}
+}
+
+func TestJavaNoJavaCommand(t *testing.T) {
+	e := newEnv(t)
+	twoJDKs(e)
+	e.tool("java", "exit 1")
+	items := e.run("java-versions")
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+	for _, it := range items {
+		if strings.Contains(it.Name, "(active)") || strings.Contains(it.Explain, javaActiveSentence) {
+			t.Errorf("unexpected active item %+v", it)
+		}
+	}
+}
+
+func TestJavaNotRunWithoutJDK(t *testing.T) {
+	e := newEnv(t)
+	marker := filepath.Join(e.Root, "java-ran")
+	e.tool("java", "touch '"+marker+"'")
+	e.run("java-versions")
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("java was run although no JDK exists")
 	}
 }
