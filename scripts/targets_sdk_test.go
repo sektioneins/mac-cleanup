@@ -206,3 +206,20 @@ func TestJavaNotRunWithoutJDK(t *testing.T) {
 		t.Error("java was run although no JDK exists")
 	}
 }
+
+func TestJavaScanDisablesPerfData(t *testing.T) {
+	e := newEnv(t)
+	twoJDKs(e)
+	record := filepath.Join(e.Bin, "java.args")
+	e.tool("java", `echo "$*" >> '`+record+`'`)
+	e.run("java-versions")
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if !strings.Contains(" "+line+" ", " -XX:-UsePerfData ") {
+			t.Errorf("java called without -XX:-UsePerfData: %q", line)
+		}
+	}
+}

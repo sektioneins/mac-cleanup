@@ -16,5 +16,5 @@ mc_path_fields "$(mc_needs_admin "$dir")" "$dir"
 mc_field grade regenerates
 mc_field default delete
 mc_warn_running 'Visual Studio Code.app/Contents/MacOS' 'VS Code'
-mc_field explain "Per-project caches and state that VS Code keeps for folders you opened. VS Code recreates them when you open a project again, but unsaved editor state and some per-project extension data are lost."
+mc_field explain "Per-project caches and state that VS Code keeps for folders you opened, such as open editors, layout and extension data. VS Code recreates them when you open a project again, with that state reset."
 mc_end

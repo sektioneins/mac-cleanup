@@ -10,6 +10,11 @@ if ! prefix=$(brew --prefix) || [ -z "$prefix" ]; then
 	exit 1
 fi
 
+# An Intel Homebrew in /usr/local next to /opt/homebrew is covered by brew-intel.
+if [ "$prefix" = "$MC_ROOT/usr/local" ] && [ -d "$MC_ROOT/opt/homebrew" ]; then
+	exit 0
+fi
+
 for file in "$prefix"/Caskroom/*/*/*.pkg "$prefix"/Caskroom/*/*/*.dmg; do
 	[ -f "$file" ] || continue
 	size=$(mc_size "$file")

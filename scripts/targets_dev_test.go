@@ -75,3 +75,15 @@ func TestDevTargetsAbsent(t *testing.T) {
 		})
 	}
 }
+
+func TestVSCodeExplainNoLossClaim(t *testing.T) {
+	e := newEnv(t)
+	e.write(filepath.Join(e.Home, "Library/Application Support/Code/User/workspaceStorage/x/state.vscdb"), 32)
+	items := e.run("vscode-workspace")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if strings.Contains(items[0].Explain, "unsaved") {
+		t.Errorf("explain claims unsaved work is lost: %q", items[0].Explain)
+	}
+}

@@ -10,7 +10,8 @@ java_checked=0
 # Prints the resolved java.home, or nothing when java is missing or prints none.
 mc_java_home() {
 	local home
-	home=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*java\.home = //p' | head -n 1)
+	# -XX:-UsePerfData: no hsperfdata file is written during the scan.
+	home=$(java -XX:-UsePerfData -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*java\.home = //p' | head -n 1)
 	[ -n "$home" ] || return 0
 	(cd -P "$home" 2>/dev/null && pwd -P)
 }

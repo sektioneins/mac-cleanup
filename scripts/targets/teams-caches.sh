@@ -19,6 +19,9 @@ mc_field category "App data"
 mc_path_fields "$(mc_needs_admin "${paths[@]}")" "${paths[@]}"
 mc_field grade regenerates
 mc_field default delete
-mc_warn_running 'Microsoft Teams' 'Teams'
+# Classic Teams only: its main process is .../Contents/MacOS/Teams, in
+# "Microsoft Teams.app" or "Microsoft Teams classic.app". New Teams runs as
+# MSTeams and keeps its data elsewhere.
+mc_warn_running 'Microsoft Teams[^/]*\.app/Contents/MacOS/Teams' 'Teams classic'
 mc_field explain "Cached web content, scripts and graphics of the classic Teams app. Teams rebuilds them on the next start, so removing them costs a slower first launch; chats and sign-in stay."
 mc_end

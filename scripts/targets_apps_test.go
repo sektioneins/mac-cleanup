@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +39,10 @@ func TestChromeCaches(t *testing.T) {
 		if !strings.Contains(it.Commands[protocol.Delete], "'"+d+"'") {
 			t.Errorf("cmd_delete %q lacks %s", it.Commands[protocol.Delete], d)
 		}
+	}
+	want := "Deleting Service Worker data also removes offline data and push notification registrations of sites and installed web apps; they set themselves up again on the next visit."
+	if !strings.Contains(it.Explain, want) {
+		t.Errorf("explain lacks the service worker sentence: %q", it.Explain)
 	}
 }
 
@@ -86,10 +91,32 @@ func TestTeamsPartial(t *testing.T) {
 	if len(it.Paths) != 2 || it.Paths[0] != want[0] || it.Paths[1] != want[1] {
 		t.Errorf("paths = %v, want %v", it.Paths, want)
 	}
-	e.running("Microsoft Teams")
-	items = e.run("teams-caches")
-	if len(items) != 1 || len(items[0].Warnings) != 1 || !strings.Contains(items[0].Warnings[0], "Teams") {
-		t.Errorf("running: %+v", items)
+}
+
+// regexPgrep matches pgrep -f -- PATTERN as an extended regex against the
+// command lines in procs.list, like the real pgrep.
+const regexPgrep = `grep -Eq -- "$3" "$(dirname "$0")/procs.list"`
+
+func TestTeamsRunningClassicOnly(t *testing.T) {
+	for proc, warn := range map[string]bool{
+		"/Applications/Microsoft Teams classic.app/Contents/MacOS/Teams":                                  true,
+		"/Applications/Microsoft Teams.app/Contents/MacOS/Teams":                                          true,
+		"/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams":                                        false,
+		"/Applications/Microsoft Teams.app/Contents/Helpers/Microsoft Teams WebView.app/Contents/MacOS/x": false,
+	} {
+		e := newEnv(t)
+		e.write(filepath.Join(e.Home, "Library/Application Support/Microsoft/Teams/Cache/x"), 32)
+		e.tool("pgrep", regexPgrep)
+		if err := os.WriteFile(filepath.Join(e.Bin, "procs.list"), []byte(proc+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		items := e.run("teams-caches")
+		if len(items) != 1 {
+			t.Fatalf("%s: got %d items, want 1", proc, len(items))
+		}
+		if got := len(items[0].Warnings) == 1 && strings.Contains(items[0].Warnings[0], "Teams"); got != warn {
+			t.Errorf("%s: warnings %q, want warning %v", proc, items[0].Warnings, warn)
+		}
 	}
 }
 

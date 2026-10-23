@@ -148,6 +148,20 @@ func TestCaskInstallers(t *testing.T) {
 	}
 }
 
+func TestCaskInstallersSkipIntelBrew(t *testing.T) {
+	e := newEnv(t)
+	prefix := filepath.Join(e.Root, "usr/local")
+	e.tool("brew", `[ "$1" = --prefix ] && echo '`+prefix+`'`)
+	e.write(filepath.Join(prefix, "Caskroom/other/1.0/other.dmg"), 32)
+	if items := e.run("brew-cask-installers"); len(items) != 1 {
+		t.Fatalf("without /opt/homebrew: got %d items, want 1", len(items))
+	}
+	e.write(filepath.Join(e.Root, "opt/homebrew/bin/brew"), 1)
+	if items := e.run("brew-cask-installers"); len(items) != 0 {
+		t.Fatalf("with /opt/homebrew: got %d items, want 0 (brew-intel covers it)", len(items))
+	}
+}
+
 func TestCaskInstallersBrewFails(t *testing.T) {
 	e := newEnv(t)
 	e.tool("brew", `echo 'Error: broken' >&2; exit 1`)
