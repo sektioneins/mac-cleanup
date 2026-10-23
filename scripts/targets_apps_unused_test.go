@@ -3,7 +3,6 @@ package scripts_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -58,7 +57,7 @@ func TestUnusedAppOld(t *testing.T) {
 	if it.ID != "Old.app" || it.Category != "Unused apps" || it.Grade != protocol.MayNeed || it.Default != protocol.Trash {
 		t.Errorf("unexpected item %+v", it)
 	}
-	if want := "Old (last opened " + used.UTC().Format("Jan 2006") + ")"; it.Name != want {
+	if want := "Old (last opened " + used.Local().Format("Jan 2006") + ")"; it.Name != want {
 		t.Errorf("name = %q, want %q", it.Name, want)
 	}
 	if d := it.LastUsed - used.Unix(); d < -1 || d > 1 {
@@ -102,7 +101,7 @@ func TestUnusedAppUnknownDate(t *testing.T) {
 	if d := items[0].LastUsed - old.Unix(); d < -1 || d > 1 {
 		t.Errorf("LastUsed = %d, want mtime %d", items[0].LastUsed, old.Unix())
 	}
-	if !strings.HasPrefix(items[0].Name, "Mystery (last opened") {
+	if items[0].Name != "Mystery (last opened: unknown)" {
 		t.Errorf("name = %q", items[0].Name)
 	}
 }
@@ -116,7 +115,26 @@ func TestUnusedAppMdlsFails(t *testing.T) {
 	if err := os.Chtimes(dir, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if items := e.run("unused-apps"); len(items) != 1 {
+	items := e.run("unused-apps")
+	if len(items) != 1 {
 		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if items[0].Name != "Plain (last opened: unknown)" {
+		t.Errorf("name = %q", items[0].Name)
+	}
+	if d := items[0].LastUsed - old.Unix(); d < -1 || d > 1 {
+		t.Errorf("LastUsed = %d, want mtime %d", items[0].LastUsed, old.Unix())
+	}
+}
+
+func TestUnusedAppSpotlightDateWins(t *testing.T) {
+	e := newEnv(t)
+	dir := e.app("Fresh", "com.example.fresh", mdlsDate(time.Now().AddDate(0, 0, -3)))
+	old := time.Now().AddDate(-2, 0, 0)
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if items := e.run("unused-apps"); len(items) != 0 {
+		t.Fatalf("got %d items, want 0", len(items))
 	}
 }

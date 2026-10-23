@@ -19,11 +19,16 @@ for app in "$MC_ROOT"/Applications/*.app; do
 	case $bundle in com.apple.*) continue ;; esac
 
 	used=""
+	label="last opened: unknown"
 	date_text=$(mdls_value kMDItemLastUsedDate "$app")
 	if [ -n "$date_text" ]; then
 		used=$(date -j -f '%Y-%m-%d %H:%M:%S %z' "$date_text" +%s 2>/dev/null) || used=""
 	fi
-	[ -n "$used" ] || used=$(stat -f %m "$app" 2>/dev/null) || continue
+	if [ -n "$used" ]; then
+		label="last opened $(date -j -r "$used" '+%b %Y')"
+	else
+		used=$(stat -f %m "$app" 2>/dev/null) || continue
+	fi
 	[ "$used" -lt "$limit" ] || continue
 
 	size=$(mc_size "$app")
@@ -33,7 +38,7 @@ for app in "$MC_ROOT"/Applications/*.app; do
 
 	mc_item
 	mc_field id "$file"
-	mc_field name "$name (last opened $(date -j -r "$used" '+%b %Y'))"
+	mc_field name "$name ($label)"
 	mc_field category "Unused apps"
 	mc_path_fields "$(mc_needs_admin "$app")" "$app"
 	mc_field grade mayneed
