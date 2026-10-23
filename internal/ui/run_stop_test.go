@@ -331,10 +331,10 @@ func TestTrashSumUsesSnapshotAction(t *testing.T) {
 
 func TestAdminInFlightCannotBeInterrupted(t *testing.T) {
 	d, _ := fakeDeps()
-	var runCtx context.Context
+	ctxCh := make(chan context.Context, 1)
 	release := make(chan struct{})
 	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
-		runCtx = ctx
+		ctxCh <- ctx
 		<-release
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 	}
@@ -343,7 +343,7 @@ func TestAdminInFlightCannotBeInterrupted(t *testing.T) {
 	m, cmd = send(m, sudoMsg{})
 	got := make(chan tea.Msg, 1)
 	go func() { got <- cmd() }()
-	time.Sleep(50 * time.Millisecond)
+	runCtx := <-ctxCh
 	m, _ = send(m, ctrlC)
 	m, _ = send(m, ctrlC)
 	if runCtx.Err() != nil {
