@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 
@@ -51,6 +52,7 @@ type runState struct {
 	inflight   bool   // a Deps.Run is in progress
 	stopping   bool   // stop after the in-flight item; start nothing new
 	refused    string // non-empty: the password was refused, waiting for the choice
+	reason     string // why sudo failed, when it was not simply refused
 	cancel     context.CancelFunc
 
 	freeBefore, freeAfter uint64
@@ -90,18 +92,20 @@ func (m Model) afterSudo(msg sudoMsg) (tea.Model, tea.Cmd) {
 		r.fresh = msg.err == nil
 		return m.advance()
 	}
-	reason := ""
+	r.reason = ""
 	var re restoreError
 	if errors.As(msg.err, &re) {
-		reason = "could not restore the terminal: " + re.Error() + "\n"
+		r.reason = "sudo could not be started or the terminal could not be restored: " + re.Error()
 	}
-	r.refused = reason + "-"
 	adm, other := m.remaining()
 	if other == 0 {
 		return m.skipAdmin()
 	}
-	r.refused = reason + "Admin password not given: " + plural(adm, "admin item") + " will be skipped.\n" +
+	r.refused = "Admin password not given: " + plural(adm, "admin item") + " will be skipped.\n" +
 		"enter runs the other " + itoa(other) + ", q stops"
+	if r.reason != "" {
+		r.refused = r.reason + "\n" + r.refused
+	}
 	return m, nil
 }
 
@@ -124,9 +128,13 @@ func (m Model) remaining() (adm, other int) {
 func (m Model) skipAdmin() (tea.Model, tea.Cmd) {
 	r := &m.run
 	r.refused = ""
+	err := errNoAdmin
+	if r.reason != "" {
+		err = fmt.Errorf("%w (%s)", errNoAdmin, r.reason)
+	}
 	for i, e := range r.entries {
 		if e.Item.Admin && r.outs[i] == nil {
-			r.outs[i] = &action.Outcome{Key: e.Item.Key(), Action: e.Action, Command: e.Command, Err: errNoAdmin}
+			r.outs[i] = &action.Outcome{Key: e.Item.Key(), Action: e.Action, Command: e.Command, Err: err}
 		}
 	}
 	return m.advance()
@@ -211,7 +219,7 @@ func (m Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case stop && !r.stopping:
 		r.stopping = true
-	case key == "ctrl+c" && r.cancel != nil:
+	case key == "ctrl+c" && r.cancel != nil && !r.entries[r.next].Item.Admin:
 		r.cancel()
 	}
 	return m, nil
@@ -229,6 +237,8 @@ func (m Model) runScreen() string {
 		for _, l := range strings.Split(r.refused, "\n") {
 			lines = append(lines, "  "+l)
 		}
+	case r.stopping && r.inflight && r.entries[r.next].Item.Admin:
+		lines = append(lines, "  stopping after "+name+"… (admin command, cannot be interrupted, waiting for it to finish)")
 	case r.stopping && r.inflight:
 		lines = append(lines, "  stopping after "+name+"…", "  "+faint.Render("ctrl+c again interrupts it"))
 	case r.stopping:
@@ -239,10 +249,11 @@ func (m Model) runScreen() string {
 		lines = append(lines, "  running "+itoa(r.next+1)+"/"+itoa(len(r.entries))+": "+name,
 			"  "+faint.Render("ctrl+c stops after this item"))
 	}
-	for i, l := range lines {
-		lines[i] = clip(l, m.width)
+	var out []string
+	for _, l := range lines {
+		out = append(out, hardWrap(l, m.width, "", "    ")...)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n")
 }
 
 func (m Model) updateResult(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -34,14 +35,41 @@ func Run(ctx context.Context, it protocol.Item, a protocol.Action) Outcome {
 	// Own process group, so a cancel kills the command and everything it
 	// started. SIGKILL: a stopped or tty-blocked child would ignore SIGINT.
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	c.Cancel = func() error {
+		err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone // already finished: not an interruption
+		}
+		return err
+	}
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	o.Output, o.Err = string(out), err
-	if err != nil && ctx.Err() != nil {
+	switch {
+	case err != nil && ctx.Err() != nil:
 		o.Err = errors.New("interrupted")
+		// Signal 0 to the group: EPERM means a member we may not signal (a
+		// privileged child) is still there.
+		if c.Process != nil && groupStillThere(c.Process.Pid) {
+			o.Err = errors.New("interrupted, but part of the command could not be stopped and may still be running")
+		}
+	case errors.Is(err, exec.ErrWaitDelay):
+		o.Err = errors.New("finished, but a background process kept its output open")
 	}
 	return o
+}
+
+// groupStillThere reports whether process group pgid has a member we may not
+// signal. macOS also answers EPERM for zombies that are about to be reaped, so
+// it waits briefly for those to go.
+func groupStillThere(pgid int) bool {
+	for i := 0; i < 10; i++ {
+		if !errors.Is(syscall.Kill(-pgid, 0), syscall.EPERM) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
 
 // SudoCmd returns the command that primes sudo credentials.

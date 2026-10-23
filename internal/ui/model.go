@@ -132,6 +132,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateRun(msg)
 		}
 		if msg.String() == "ctrl+c" {
+			if m.running && m.screen == screenReview {
+				return m, nil // the run is about to start and takes over stopping
+			}
 			return m, tea.Quit
 		}
 		switch m.screen {

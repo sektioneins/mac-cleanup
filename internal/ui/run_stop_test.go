@@ -282,7 +282,7 @@ func TestSudoDoneDistinguishesRestoreErrors(t *testing.T) {
 	m, cmd := confirm(t, *d, mixed())
 	m, _ = send(m, cmd())
 	m, _ = send(m, sudoDone(errors.New("tty gone")))
-	if !strings.Contains(m.View(), "could not restore the terminal: tty gone") ||
+	if !strings.Contains(m.View(), "sudo could not be started or the terminal could not be restored: tty gone") ||
 		!strings.Contains(m.View(), "enter runs the other 1, q stops") {
 		t.Fatalf("view:\n%s", m.View())
 	}
@@ -326,5 +326,69 @@ func TestTrashSumUsesSnapshotAction(t *testing.T) {
 	m := finish(t, *d, scan.Result{Script: "s", Items: []protocol.Item{it}})
 	if !strings.Contains(m.View(), "Moved to Trash: 5 MB") {
 		t.Fatalf("view:\n%s", m.View())
+	}
+}
+
+func TestAdminInFlightCannotBeInterrupted(t *testing.T) {
+	d, _ := fakeDeps()
+	var runCtx context.Context
+	release := make(chan struct{})
+	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+		runCtx = ctx
+		<-release
+		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
+	}
+	m, cmd := confirm(t, *d, scan.Result{Script: "s", Items: []protocol.Item{adminItem("adm"), item("s", "plain", 3_000_000)}})
+	m, _ = send(m, cmd())
+	m, cmd = send(m, sudoMsg{})
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+	time.Sleep(50 * time.Millisecond)
+	m, _ = send(m, ctrlC)
+	m, _ = send(m, ctrlC)
+	if runCtx.Err() != nil {
+		t.Fatal("an admin command must not be cancelled")
+	}
+	m.width = 200
+	v := m.View()
+	if !strings.Contains(v, "stopping after adm… (admin command, cannot be interrupted, waiting for it to finish)") {
+		t.Fatalf("view:\n%s", v)
+	}
+	close(release)
+	m, cmd = send(m, <-got)
+	if cmd != nil || m.screen != screenResult || !strings.Contains(m.View(), "Not run:") {
+		t.Fatalf("screen=%v", m.screen)
+	}
+}
+
+func TestRefusalReasonVisibleWhenNothingElseRuns(t *testing.T) {
+	d, _ := fakeDeps()
+	m, cmd := confirm(t, *d, scan.Result{Script: "s", Items: []protocol.Item{adminItem("adm")}})
+	m, _ = send(m, cmd())
+	m.width = 200
+	m, _ = send(m, sudoDone(errors.New("tty gone")))
+	want := "admin password not given (sudo could not be started or the terminal could not be restored: tty gone)"
+	if m.screen != screenResult || !strings.Contains(m.resultText(), want) {
+		t.Fatalf("view:\n%s", m.View())
+	}
+}
+
+func TestCtrlCOnReviewAfterEnterDoesNotQuit(t *testing.T) {
+	d, _ := fakeDeps()
+	ran := counting(d)
+	m := loaded(t, *d, twoItems())
+	for _, it := range m.visibleItems() {
+		m.selected[it.Key()] = true
+	}
+	m = press(m, "enter")
+	m, start := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd := send(m, ctrlC)
+	if cmd != nil {
+		t.Fatal("ctrl+c between enter and the run start must be dropped")
+	}
+	m, cmd = send(m, start())
+	m, _ = pump(t, m, cmd)
+	if len(*ran) != 2 || m.screen != screenResult {
+		t.Fatalf("ran=%v screen=%v", *ran, m.screen)
 	}
 }

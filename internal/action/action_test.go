@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,9 @@ func TestRunCancelKillsProcessGroup(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Outcome, 1)
-	go func() { done <- Run(ctx, item("sleep 30; touch '"+marker+"'"), protocol.Delete) }()
+	// The subshell is a second process in the group; killing only bash would
+	// leave it running and it would touch the marker.
+	go func() { done <- Run(ctx, item("(sleep 1; touch '"+marker+"'); :"), protocol.Delete) }()
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 	select {
@@ -79,8 +82,25 @@ func TestRunCancelKillsProcessGroup(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return within 2s of cancel")
 	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
-		t.Error("marker exists: command kept running")
+		t.Error("marker exists: part of the command kept running")
+	}
+}
+
+func TestRunFinishedCommandNotInterrupted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	it := item("true")
+	o := Run(ctx, it, protocol.Delete)
+	cancel()
+	if o.Err != nil {
+		t.Fatalf("Err = %v", o.Err)
+	}
+}
+
+func TestRunBackgroundProcessHoldingOutput(t *testing.T) {
+	o := Run(context.Background(), item("sleep 3 & :"), protocol.Delete)
+	if o.Err == nil || !strings.Contains(o.Err.Error(), "background process kept its output open") {
+		t.Fatalf("Err = %v", o.Err)
 	}
 }
