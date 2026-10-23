@@ -130,9 +130,28 @@ func TestLogicLeftovers(t *testing.T) {
 	if len(it.Paths) != 1 || it.Paths[0] != dir || it.Size < 32768 {
 		t.Errorf("unexpected fields %+v", it)
 	}
+	for _, s := range []string{"instrument, loop and plug-in content", "MainStage", "GarageBand"} {
+		if !strings.Contains(it.Explain, s) {
+			t.Errorf("explain lacks %q: %q", s, it.Explain)
+		}
+	}
+	if strings.Contains(it.Explain, "settings") {
+		t.Errorf("explain claims settings: %q", it.Explain)
+	}
 	e.write(filepath.Join(e.Root, "Applications/Logic Pro.app/Contents/x"), 1)
 	if items := e.run("logic-leftovers"); len(items) != 0 {
 		t.Errorf("with app installed: got %d items, want 0", len(items))
+	}
+}
+
+func TestLogicLeftoversOtherApps(t *testing.T) {
+	for _, app := range []string{"Logic Pro X.app", "MainStage.app", "MainStage 3.app"} {
+		e := newEnv(t)
+		e.write(filepath.Join(e.Root, "Library/Application Support/Logic/x"), 32)
+		e.write(filepath.Join(e.Root, "Applications", app, "Contents/x"), 1)
+		if items := e.run("logic-leftovers"); len(items) != 0 {
+			t.Errorf("with %s installed: got %d items, want 0", app, len(items))
+		}
 	}
 }
 
