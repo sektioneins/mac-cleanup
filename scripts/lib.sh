@@ -20,7 +20,7 @@ mc_end() { printf 'end\n'; }
 # mc_field KEY VALUE: print one record field with \, newline and TAB escaped.
 mc_field() {
 	local v=$2
-	v=${v//$_MC_BS/$_MC_BS$_MC_BS}
+	v=${v//"$_MC_BS"/"$_MC_BS$_MC_BS"}
 	v=${v//$'\n'/${_MC_BS}n}
 	v=${v//$'\t'/${_MC_BS}t}
 	printf '%s\t%s\n' "$1" "$v"
@@ -68,7 +68,7 @@ mc_rm_cmd() {
 
 # mc_trash_cmd ADMIN PATH...: command text that moves the paths to the Trash.
 mc_trash_cmd() {
-	local admin=$1 p out="" stamp
+	local admin=$1 p out="" stamp n dest
 	shift
 	if [ "$admin" != 1 ]; then
 		echo "/usr/bin/trash $(mc_quote_all "$@")"
@@ -77,7 +77,9 @@ mc_trash_cmd() {
 	stamp=$(date +%Y%m%d-%H%M%S)
 	for p in "$@"; do
 		[ -n "$out" ] && out="$out && "
-		out="${out}sudo mv -- $(mc_quote "$p") $(mc_quote "$HOME/.Trash/$(basename "$p") $stamp")"
+		n=$(printf '%s' "$p" | cksum | cut -d ' ' -f 1)
+		dest="$HOME/.Trash/$(basename "$p") $stamp $n"
+		out="${out}[ ! -e $(mc_quote "$dest") ] && sudo mv -- $(mc_quote "$p") $(mc_quote "$dest")"
 	done
 	echo "$out"
 }
