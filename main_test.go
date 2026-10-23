@@ -51,3 +51,19 @@ func TestPrintList(t *testing.T) {
 		t.Errorf("got %q, want %q", b.String(), want)
 	}
 }
+
+func TestPrintListEscapesControlCharacters(t *testing.T) {
+	var b strings.Builder
+	printList(&b, []scan.Result{
+		{Script: "a.sh", Items: []protocol.Item{{
+			Category: "Caches", Name: "a\x1b[Kb\tc\rd", Size: 2_000, Default: protocol.Delete,
+			Commands: map[protocol.Action]string{protocol.Delete: "rm '/x\r'\nls \u0085"},
+		}}},
+		{Script: "b\x7f.sh", Err: errors.New("b.sh: boom\nmore")},
+	})
+	want := "Caches\ta\\x1b[Kb\\tc\\rd\t2 KB\tdelete\trm '/x\\r'\\nls \\u0085\n" +
+		"FAILED\tb\\x7f.sh\tb.sh: boom\\nmore\n"
+	if b.String() != want {
+		t.Errorf("got %q, want %q", b.String(), want)
+	}
+}

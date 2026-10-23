@@ -17,12 +17,14 @@ mc_quote() {
 mc_item() { printf 'item\n'; }
 mc_end() { printf 'end\n'; }
 
-# mc_field KEY VALUE: print one record field with \, newline and TAB escaped.
+# mc_field KEY VALUE: print one record field with \, newline, TAB and CR
+# escaped.
 mc_field() {
 	local v=$2
 	v=${v//"$_MC_BS"/"$_MC_BS$_MC_BS"}
 	v=${v//$'\n'/${_MC_BS}n}
 	v=${v//$'\t'/${_MC_BS}t}
+	v=${v//$'\r'/${_MC_BS}r}
 	printf '%s\t%s\n' "$1" "$v"
 }
 

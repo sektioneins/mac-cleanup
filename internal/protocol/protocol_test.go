@@ -64,6 +64,17 @@ func TestParseUnescape(t *testing.T) {
 	}
 }
 
+func TestParseCarriageReturn(t *testing.T) {
+	in := "item\n" + base + "path\t/Icon\\r\npath\t/a\\\\r\nend\n"
+	got, err := Parse(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := got[0].Paths; len(p) != 2 || p[0] != "/Icon\r" || p[1] != `/a\r` {
+		t.Fatalf("paths = %q", p)
+	}
+}
+
 func TestParseMultiple(t *testing.T) {
 	one := "item\n" + base + "end\n"
 	two := strings.Replace(one, "id\ta", "id\tb", 1)

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -90,4 +91,65 @@ func wrap(s string, w, maxLines int) []string {
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	return line
+}
+
+// Visible renders control characters as escaped text, so a name, path or
+// command can be shown without the terminal acting on them: C0 controls
+// other than newline and tab, DEL and C1 controls become \r, \x1b, \x7f or
+// \u0085, and bytes that are not valid UTF-8 become \xNN. Display only: the
+// command that runs is never changed.
+func Visible(s string) string {
+	if !hasControl(s) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && n == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x80 && isControl(r):
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case isControl(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteString(s[i : i+n])
+		}
+		i += n
+	}
+	return b.String()
+}
+
+// isControl reports the runes Visible escapes.
+func isControl(r rune) bool {
+	return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f || (r >= 0x80 && r < 0xa0)
+}
+
+// hasControl reports whether Visible would change s.
+func hasControl(s string) bool {
+	if !utf8.ValidString(s) {
+		return true
+	}
+	return strings.IndexFunc(s, isControl) >= 0
+}
+
+// itemHasControl reports whether the name, a path or a command of it
+// contains characters that are shown escaped.
+func itemHasControl(it protocol.Item) bool {
+	if hasControl(it.Name) {
+		return true
+	}
+	for _, p := range it.Paths {
+		if hasControl(p) {
+			return true
+		}
+	}
+	for _, c := range it.Commands {
+		if hasControl(c) {
+			return true
+		}
+	}
+	return false
 }

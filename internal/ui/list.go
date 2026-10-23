@@ -260,7 +260,7 @@ func (m Model) listScreen() string {
 	var body []string
 	curLine := 0
 	for _, g := range m.groups() {
-		body = append(body, m.twoCol(bold.Render("▾ "+g.name), HumanSize(g.total)+"  "))
+		body = append(body, m.twoCol(bold.Render("▾ "+Visible(g.name)), HumanSize(g.total)+"  "))
 		for _, r := range g.rows {
 			if len(rows) > 0 && sameRow(r, rows[cursor]) {
 				curLine = len(body)
@@ -285,7 +285,7 @@ func (m Model) listScreen() string {
 	n, size := m.selectedTotals()
 	var foot []string
 	for _, f := range m.scanFailures() {
-		foot = append(foot, "scan failed: "+f.Script+": "+firstLine(f.Err.Error()))
+		foot = append(foot, Visible("scan failed: "+f.Script+": "+firstLine(f.Err.Error())))
 	}
 	foot = append(foot, m.rule())
 	foot = append(foot, detail...)
@@ -316,16 +316,16 @@ func (m Model) rowLine(r row, cur bool) string {
 		mark = "> "
 	}
 	if r.view != "" {
-		return mark + "    " + r.view + "  (" + plural(r.count, "folder") + ")  " + HumanSize(r.size) + "  enter to open"
+		return mark + "    " + Visible(r.view) + "  (" + plural(r.count, "folder") + ")  " + HumanSize(r.size) + "  enter to open"
 	}
 	it := r.item
 	tail := "  " + gradeLabel(it.Grade)
 	if len(it.Warnings) > 0 {
-		tail += "  ⚠ " + it.Warnings[0]
+		tail += "  ⚠ " + Visible(it.Warnings[0])
 	}
 	size := HumanSize(it.Size)
 	nameW := max(m.width-len(mark)-4-1-9-lipgloss.Width(tail), 8)
-	line := mark + checkbox(m.selected[it.Key()]) + " " + fit(it.Name, nameW) + " " + padLeft(size, 9) + tail
+	line := mark + checkbox(m.selected[it.Key()]) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(size, 9) + tail
 	if cur {
 		return rev.Render(line)
 	}
@@ -344,17 +344,17 @@ const detailLines = 4
 func (m Model) detail(r row) []string {
 	out := make([]string, detailLines)
 	if r.view != "" {
-		out[0] = "  " + bold.Render(r.view)
+		out[0] = "  " + bold.Render(Visible(r.view))
 		out[1] = "  " + plural(r.count, "folder") + ", press enter to choose among them."
 		return out
 	}
 	it := r.item
 	path := ""
 	if len(it.Paths) > 0 {
-		path = "   " + it.Paths[0]
+		path = "   " + Visible(it.Paths[0])
 	}
-	out[0] = "  " + bold.Render(it.Name) + path
-	for i, l := range wrap(it.Explain, m.width-2, detailLines-1) {
+	out[0] = "  " + bold.Render(Visible(it.Name)) + path
+	for i, l := range wrap(Visible(it.Explain), m.width-2, detailLines-1) {
 		out[i+1] = "  " + l
 	}
 	return out
@@ -378,14 +378,14 @@ func (m Model) viewScreen() string {
 			mark = "> "
 		}
 		nameW := max(m.width-len(mark)-4-1-9, 8)
-		line := mark + checkbox(m.selected[it.Key()]) + " " + fit(it.Name, nameW) + " " + padLeft(HumanSize(it.Size), 9)
+		line := mark + checkbox(m.selected[it.Key()]) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(HumanSize(it.Size), 9)
 		if i == cur {
 			line = rev.Render(line)
 		}
 		body = append(body, line)
 	}
 	head := []string{
-		m.twoCol(" "+bold.Render(m.view), "selected: "+itoa(selN)+" of "+itoa(len(items))+", "+HumanSize(selSize)+" "),
+		m.twoCol(" "+bold.Render(Visible(m.view)), "selected: "+itoa(selN)+" of "+itoa(len(items))+", "+HumanSize(selSize)+" "),
 		m.rule(),
 	}
 	detail := make([]string, detailLines)

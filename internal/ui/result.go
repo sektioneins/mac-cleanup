@@ -243,7 +243,7 @@ func (m Model) runScreen() string {
 	}
 	name := ""
 	if r.next < len(r.entries) {
-		name = r.entries[r.next].Item.Name
+		name = Visible(r.entries[r.next].Item.Name)
 	}
 	switch {
 	case r.refused != "":
@@ -349,8 +349,8 @@ func (m Model) resultLines() []string {
 	}
 	for _, i := range failed {
 		e, o := r.entries[i], r.outs[i]
-		out = append(out, "", "  "+clip(e.Item.Name, m.width-2))
-		out = append(out, hardWrap(e.Command, m.width, "   $ ", "     ")...)
+		out = append(out, "", "  "+clip(Visible(e.Item.Name), m.width-2))
+		out = append(out, hardWrap(Visible(e.Command), m.width, "   $ ", "     ")...)
 		out = append(out, hardWrap("error: "+sanitize(o.Err.Error()), m.width, "   ", "     ")...)
 		if s := strings.TrimRight(sanitize(o.Output), "\n"); s != "" {
 			out = append(out, hardWrap(s, m.width, "   ", "   ")...)
@@ -359,7 +359,7 @@ func (m Model) resultLines() []string {
 	var notRun []string
 	for i, o := range r.outs {
 		if o == nil {
-			notRun = append(notRun, "  "+clip(r.entries[i].Item.Name, m.width-2))
+			notRun = append(notRun, "  "+clip(Visible(r.entries[i].Item.Name), m.width-2))
 		}
 	}
 	if len(notRun) > 0 {

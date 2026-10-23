@@ -345,7 +345,7 @@ func (m Model) reviewLayoutFor() reviewLayout {
 	l.title = []string{title}
 	nameW := 0
 	for _, o := range items {
-		nameW = max(nameW, lipgloss.Width(o.Name))
+		nameW = max(nameW, lipgloss.Width(Visible(o.Name)))
 	}
 	var warns []string
 	for i, it := range items {
@@ -359,20 +359,23 @@ func (m Model) reviewLayoutFor() reviewLayout {
 		if m.width > 0 {
 			w = min(w, max(m.width-15-lipgloss.Width(ch), 4))
 		}
-		line := mark + fit(it.Name, max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
+		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
 		if i == cur {
 			line = rev.Render(clip(line, m.width))
 		}
 		l.body = append(l.body, line)
-		l.body = append(l.body, hardWrap(it.Commands[m.chosen(it)], m.width, cmdFirst, cmdCont)...)
+		l.body = append(l.body, hardWrap(Visible(it.Commands[m.chosen(it)]), m.width, cmdFirst, cmdCont)...)
 		if it.Admin {
 			l.body = append(l.body, cmdFirst+"(admin password)")
+		}
+		if itemHasControl(it) {
+			l.body = append(l.body, hardWrap("⚠ contains control characters, shown escaped", m.width, cmdFirst, cmdCont)...)
 		}
 		if i == cur {
 			l.ce = len(l.body) - 1
 		}
 		for _, w := range it.Warnings {
-			warns = append(warns, hardWrap("⚠ "+w+": quit it and press r to re-check, or s to skip", m.width, " ", "   ")...)
+			warns = append(warns, hardWrap("⚠ "+Visible(w)+": quit it and press r to re-check, or s to skip", m.width, " ", "   ")...)
 		}
 	}
 	if len(items) == 0 {
@@ -381,7 +384,7 @@ func (m Model) reviewLayoutFor() reviewLayout {
 	blocked := len(items) == 0 || len(warns) > 0
 	extra := warns
 	for _, n := range m.notes {
-		extra = append(extra, hardWrap(n, m.width, " ", "   ")...)
+		extra = append(extra, hardWrap(Visible(n), m.width, " ", "   ")...)
 	}
 	run := "[ run ]"
 	if blocked {

@@ -25,7 +25,7 @@ func TestQuoteRoundTrip(t *testing.T) {
 
 func TestFieldEscapingRoundTrip(t *testing.T) {
 	e := newEnv(t)
-	for _, want := range []string{"a\\b\tc\nd", `a\\b`, `a\nb`, `a\tb`, `\`, `x\` + "\n"} {
+	for _, want := range []string{"a\\b\tc\nd", `a\\b`, `a\nb`, `a\tb`, `\`, `x\` + "\n", "a\rb", "end\r", `a\rb`} {
 		checkFieldRoundTrip(t, e, want)
 	}
 }
@@ -158,6 +158,36 @@ func TestTrashCmdDestinationsDiffer(t *testing.T) {
 	}
 	if strings.Count(got, "[ ! -e ") != 2 {
 		t.Errorf("every move needs an existence guard: %q", got)
+	}
+}
+
+func TestCRPathEndToEnd(t *testing.T) {
+	e := newEnv(t)
+	dir := filepath.Join(e.Home, "d")
+	target := filepath.Join(dir, "Icon\r")
+	sibling := filepath.Join(dir, "Icon")
+	e.write(target, 1)
+	e.write(sibling, 1)
+	t.Setenv("T", target)
+	out := e.bash(`mc_item; mc_field id x; mc_field name n; mc_field category Developer
+mc_field grade regenerates; mc_field default delete; mc_field explain e
+mc_path_fields 0 "$T"; mc_end`)
+	items, err := protocol.Parse(strings.NewReader(out))
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if items[0].Paths[0] != target {
+		t.Fatalf("path = %q, want %q", items[0].Paths[0], target)
+	}
+	if want := "rm -rf -- '" + target + "'"; items[0].Commands[protocol.Delete] != want {
+		t.Fatalf("cmd_delete = %q, want %q", items[0].Commands[protocol.Delete], want)
+	}
+	e.output(e.command("-c", items[0].Commands[protocol.Delete]))
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("target still exists (err %v)", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Errorf("sibling was removed: %v", err)
 	}
 }
 

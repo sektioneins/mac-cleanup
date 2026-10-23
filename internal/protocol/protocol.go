@@ -53,7 +53,7 @@ func (it Item) Actions() []Action {
 	return out
 }
 
-var unescaper = strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\t`, "\t")
+var unescaper = strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\t`, "\t", `\r`, "\r")
 
 // Parse reads records from r. Errors name the offending line number.
 func Parse(r io.Reader) ([]Item, error) {

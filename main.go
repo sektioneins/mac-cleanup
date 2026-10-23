@@ -32,9 +32,10 @@ func scriptsDir(flagValue, exe, cwd string) string {
 	return filepath.Join(cwd, "scripts")
 }
 
-// clean makes a field safe for tab separated output.
+// clean makes a field safe for tab separated output: control characters are
+// escaped as on screen (ui.Visible), tab and newline as \t and \n.
 func clean(s string) string {
-	return strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(s)
+	return strings.NewReplacer("\t", `\t`, "\n", `\n`).Replace(ui.Visible(s))
 }
 
 // printList writes one line per item and one per failed script, in order.
