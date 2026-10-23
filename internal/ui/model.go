@@ -70,11 +70,12 @@ type Model struct {
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
 
-	rev     []string                   // review: item keys in list order
+	revKeys []string                   // review: item keys in list order
 	ract    map[string]protocol.Action // review: chosen action per key
 	rcurID  string                     // review: key of the item under the cursor
 	rcursor int                        // review: fallback index
 	notes   []string                   // review: messages from re-checks
+	running bool                       // review confirmed; later re-checks are ignored
 
 	width, height int
 }
@@ -105,7 +106,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pinCursors()
 		m.results = append(m.results, scan.Result(msg))
 	case recheckMsg:
-		m.applyRecheck(scan.Result(msg))
+		if !m.running {
+			m.applyRecheck(scan.Result(msg))
+		}
 	case freeMsg:
 		m.free, m.hasFree = msg, true
 	case tea.KeyMsg:
