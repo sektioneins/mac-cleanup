@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -68,22 +69,47 @@ func listMode(w io.Writer, scripts []string) {
 	printList(w, results)
 }
 
-func main() {
-	dir := flag.String("scripts", "", "scripts directory (default: next to the executable, else ./scripts)")
-	list := flag.Bool("list", false, "scan, print the items and exit; changes nothing")
-	flag.Parse()
+// resolveExe follows symlinks to the real executable, so scripts next to it
+// are found when it is started through a link; on error exe is returned.
+func resolveExe(exe string) string {
+	if exe == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		return real
+	}
+	return exe
+}
+
+// run is the program without os.Exit; it returns the exit status.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mac-cleanup", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dir := fs.String("scripts", "", "scripts directory (default: next to the executable, else ./scripts)")
+	list := fs.Bool("list", false, "scan, print the items and exit; changes nothing")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 
 	exe, _ := os.Executable()
 	cwd, _ := os.Getwd()
-	scripts, err := scan.Discover(scriptsDir(*dir, exe, cwd))
+	sdir := scriptsDir(*dir, resolveExe(exe), cwd)
+	scripts, err := scan.Discover(sdir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "mac-cleanup:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "mac-cleanup:", err)
+		return 1
+	}
+	if len(scripts) == 0 {
+		fmt.Fprintln(stderr, "mac-cleanup: no target scripts in", sdir)
+		return 1
 	}
 
 	if *list {
-		listMode(os.Stdout, scripts)
-		return
+		listMode(stdout, scripts)
+		return 0
 	}
 
 	free, err := os.UserHomeDir()
@@ -91,7 +117,12 @@ func main() {
 		free = "/"
 	}
 	if _, err := tea.NewProgram(ui.New(scripts, ui.DefaultDeps(free)), tea.WithAltScreen()).Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "mac-cleanup:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "mac-cleanup:", err)
+		return 1
 	}
+	return 0
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

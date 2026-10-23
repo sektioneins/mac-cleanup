@@ -67,3 +67,64 @@ func TestPrintListEscapesControlCharacters(t *testing.T) {
 		t.Errorf("got %q, want %q", b.String(), want)
 	}
 }
+
+func TestRunFailsWithoutScripts(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{{"-scripts", dir, "-list"}, {"-scripts", dir}} {
+		var stdout, stderr strings.Builder
+		if code := run(args, &stdout, &stderr); code != 1 {
+			t.Errorf("%v: exit %d, want 1", args, code)
+		}
+		if want := "mac-cleanup: no target scripts in " + dir + "\n"; stderr.String() != want || stdout.String() != "" {
+			t.Errorf("%v: stdout %q, stderr %q, want stderr %q", args, stdout.String(), stderr.String(), want)
+		}
+	}
+}
+
+func TestRunListMode(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "targets", "a.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "printf 'item\\nid\\tx\\nname\\tX\\ncategory\\tDeveloper\\nsize\\t2000\\ngrade\\tregenerates\\ndefault\\tdelete\\nexplain\\te\\ncmd_delete\\ttrue\\nend\\n'\n"
+	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	if code := run([]string{"-scripts", dir, "-list"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if want := "Developer\tX\t2 KB\tdelete\ttrue\n"; stdout.String() != want {
+		t.Errorf("stdout %q, want %q", stdout.String(), want)
+	}
+}
+
+func TestResolveExe(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "mac-cleanup")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "mac-cleanup")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveExe(link); got != want {
+		t.Errorf("resolveExe(link) = %q, want %q", got, want)
+	}
+	missing := filepath.Join(dir, "missing")
+	if got := resolveExe(missing); got != missing {
+		t.Errorf("resolveExe(missing) = %q, want it unchanged", got)
+	}
+	if got := resolveExe(""); got != "" {
+		t.Errorf("resolveExe(\"\") = %q", got)
+	}
+}
