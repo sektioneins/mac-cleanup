@@ -40,6 +40,19 @@ func gradeLabel(g protocol.Grade) string {
 	return string(g)
 }
 
+// gradeStyle colours a grade from safe (green) to risky (red).
+func gradeStyle(g protocol.Grade) lipgloss.Style {
+	switch g {
+	case protocol.Regenerates:
+		return good
+	case protocol.Redownload:
+		return caution
+	case protocol.MayNeed:
+		return danger
+	}
+	return lipgloss.NewStyle()
+}
+
 // fit pads or truncates s to exactly w display cells.
 func fit(s string, w int) string {
 	if w <= 0 {

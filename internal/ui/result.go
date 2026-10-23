@@ -235,7 +235,7 @@ func (m Model) runScreen() string {
 		style lipgloss.Style
 	}
 	plain := lipgloss.NewStyle()
-	lines := []line{{" Running", bold}, {"", plain}}
+	lines := []line{{" Running", heading}, {"", plain}}
 	add := func(st lipgloss.Style, texts ...string) {
 		for _, t := range texts {
 			lines = append(lines, line{t, st})
@@ -248,7 +248,7 @@ func (m Model) runScreen() string {
 	switch {
 	case r.refused != "":
 		for _, l := range strings.Split(r.refused, "\n") {
-			add(plain, "  "+l)
+			add(caution, "  "+l)
 		}
 	case r.stopping && r.inflight && r.entries[r.next].Item.Admin:
 		add(plain, "  stopping after "+name+"… (admin command, cannot be interrupted, waiting for it to finish)")
@@ -326,7 +326,7 @@ func (m Model) resultLines() []string {
 		if r.freeAfter > r.freeBefore {
 			gained = int64(r.freeAfter - r.freeBefore)
 		}
-		l += "   gained: " + HumanSize(gained)
+		l += "   gained: " + good.Render(HumanSize(gained))
 	}
 	out := []string{" " + l}
 
@@ -345,13 +345,13 @@ func (m Model) resultLines() []string {
 		out = append(out, " Moved to Trash: "+HumanSize(trashed)+", freed once you empty the Trash")
 	}
 	if len(failed) > 0 {
-		out = append(out, "", " "+bold.Render(plural(len(failed), "item")+" failed"))
+		out = append(out, "", " "+danger.Bold(true).Render(plural(len(failed), "item")+" failed"))
 	}
 	for _, i := range failed {
 		e, o := r.entries[i], r.outs[i]
 		out = append(out, "", "  "+clip(Visible(e.Item.Name), m.width-2))
 		out = append(out, hardWrap(Visible(e.Command), m.width, "   $ ", "     ")...)
-		out = append(out, hardWrap("error: "+sanitize(o.Err.Error()), m.width, "   ", "     ")...)
+		out = append(out, paintAll(danger, hardWrap("error: "+sanitize(o.Err.Error()), m.width, "   ", "     "))...)
 		if s := strings.TrimRight(sanitize(o.Output), "\n"); s != "" {
 			out = append(out, hardWrap(s, m.width, "   ", "   ")...)
 		}
@@ -363,7 +363,7 @@ func (m Model) resultLines() []string {
 		}
 	}
 	if len(notRun) > 0 {
-		out = append(out, "", " "+bold.Render("Not run:"))
+		out = append(out, "", " "+caution.Bold(true).Render("Not run:"))
 		out = append(out, notRun...)
 	}
 	return out
@@ -378,6 +378,6 @@ func (m Model) resultScreen() string {
 	if len(lines) > room {
 		hint = "up/down pgup/pgdn scroll  q quit"
 	}
-	out := append([]string{" " + bold.Render("Done")}, lines[start:end]...)
+	out := append([]string{" " + heading.Render("Done")}, lines[start:end]...)
 	return strings.Join(append(out, "  "+faint.Render(hint)), "\n")
 }

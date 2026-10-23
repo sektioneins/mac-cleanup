@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"mac-cleanup/internal/protocol"
 	"mac-cleanup/internal/scan"
@@ -343,10 +344,15 @@ func cellW(r rune) int {
 	return lipgloss.Width(string(r))
 }
 
-// clip cuts s to at most w display cells (w <= 0: unchanged).
+// clip cuts s to at most w display cells (w <= 0: unchanged). Escape
+// sequences in s are styling (shown text is escaped by Visible) and are kept
+// whole.
 func clip(s string, w int) string {
 	if w <= 0 || lipgloss.Width(s) <= w {
 		return s
+	}
+	if strings.Contains(s, "\x1b") {
+		return ansi.Truncate(s, w, "")
 	}
 	var b strings.Builder
 	used := 0
@@ -383,7 +389,7 @@ func (m Model) reviewLayoutFor() reviewLayout {
 	for _, it := range items {
 		size += it.Size
 	}
-	title := " " + bold.Render("Review: "+plural(len(items), "item")+", "+HumanSize(size))
+	title := " " + heading.Render("Review: "+plural(len(items), "item")+", "+HumanSize(size))
 	if hint := "←/→ or d/t to switch "; lipgloss.Width(title)+lipgloss.Width(hint)+1 <= m.width {
 		title = m.twoCol(title, hint)
 	}
@@ -401,28 +407,30 @@ func (m Model) reviewLayoutFor() reviewLayout {
 			mark = "> "
 			l.cs = len(l.body)
 		}
-		ch := m.choices(it)
+		ch := m.choices(it, false)
 		w := nameW
 		if m.width > 0 {
 			w = min(w, max(m.width-15-lipgloss.Width(ch), 4))
 		}
-		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   " + ch
+		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   "
 		if i == cur && m.rfocus == focusItems {
-			line = rev.Render(clip(line, m.width))
+			line = rev.Render(clip(line+ch, m.width))
+		} else {
+			line = clip(line+m.choices(it, true), m.width)
 		}
 		l.body = append(l.body, line)
 		l.body = append(l.body, hardWrap(Visible(it.Commands[m.chosen(it)]), m.width, cmdFirst, cmdCont)...)
 		if it.Admin {
-			l.body = append(l.body, cmdFirst+"(admin password)")
+			l.body = append(l.body, cmdFirst+caution.Render("(admin password)"))
 		}
 		if itemHasControl(it) {
-			l.body = append(l.body, hardWrap("⚠ contains control characters, shown escaped", m.width, cmdFirst, cmdCont)...)
+			l.body = append(l.body, paintAll(caution, hardWrap("⚠ contains control characters, shown escaped", m.width, cmdFirst, cmdCont))...)
 		}
 		if i == cur {
 			l.ce = len(l.body) - 1
 		}
 		for _, w := range it.Warnings {
-			warns = append(warns, hardWrap("⚠ "+Visible(w)+": quit it and press r to re-check, or s to skip", m.width, " ", "   ")...)
+			warns = append(warns, paintAll(caution, hardWrap("⚠ "+Visible(w)+": quit it and press r to re-check, or s to skip", m.width, " ", "   "))...)
 		}
 	}
 	if len(items) == 0 {
@@ -434,21 +442,24 @@ func (m Model) reviewLayoutFor() reviewLayout {
 		extra = append(extra, hardWrap(Visible(n), m.width, " ", "   ")...)
 	}
 	run, back := "[ run ]", "[ back ]"
+	runSt, backSt := good, lipgloss.NewStyle()
 	if blocked {
-		run = "( run: blocked )"
+		run, runSt = "( run: blocked )", danger
 	}
-	// The line is clipped as plain text and the focused button styled
-	// afterwards, so clipping never cuts an escape sequence.
-	buttons := clip(m.twoCol("", run+"   "+back+"  "), m.width)
 	hint := "up/down move  s skip  r re-check  enter/tab to buttons  esc back to list"
 	if m.rfocus == focusButtons {
-		focused := run
 		if m.rbutton == buttonBack {
-			focused = back
+			backSt = backSt.Reverse(true)
+		} else {
+			runSt = runSt.Reverse(true)
 		}
-		buttons = strings.Replace(buttons, focused, rev.Render(focused), 1)
 		hint = "←/→ choose  enter press  tab back to items  esc back to list"
 	}
+	// The line is clipped as plain text and the buttons styled afterwards, so
+	// a button cut by the clip stays plain.
+	buttons := clip(m.twoCol("", run+"   "+back+"  "), m.width)
+	buttons = strings.Replace(buttons, run, runSt.Render(run), 1)
+	buttons = strings.Replace(buttons, back, backSt.Render(back), 1)
 	pinned := []string{buttons, clip("  "+faint.Render(hint), m.width)}
 
 	// Warnings and notes stay pinned if at least 3 body lines fit beside them;
@@ -501,19 +512,37 @@ func (m Model) reviewScreen() string {
 	return strings.Join(append(out, l.foot...), "\n")
 }
 
-// choices renders the action radio for one item; a single action has no choice.
-func (m Model) choices(it protocol.Item) string {
+// choices renders the action radio for one item; a single action has no
+// choice. Styled, the chosen action is red for delete and yellow for trash,
+// the others faint.
+func (m Model) choices(it protocol.Item, styled bool) string {
 	acts := it.Actions()
-	if len(acts) == 1 {
-		return "(•) " + string(acts[0])
-	}
 	var parts []string
 	for _, a := range acts {
+		on := a == m.chosen(it) || len(acts) == 1
 		dot := "( )"
-		if a == m.chosen(it) {
+		if on {
 			dot = "(•)"
 		}
-		parts = append(parts, dot+" "+string(a))
+		part := dot + " " + string(a)
+		switch {
+		case !styled:
+		case !on:
+			part = faint.Render(part)
+		case a == protocol.Delete:
+			part = danger.Render(part)
+		default:
+			part = caution.Render(part)
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, "  ")
+}
+
+// paintAll renders each line in st.
+func paintAll(st lipgloss.Style, lines []string) []string {
+	for i, l := range lines {
+		lines[i] = paint(st, l)
+	}
+	return lines
 }

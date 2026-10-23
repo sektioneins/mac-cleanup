@@ -441,17 +441,18 @@ func TestTabFocusesButtons(t *testing.T) {
 	a := both("cmd_delete", "cmd_trash")
 	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{a, item("s", "z", 4_000_000)}})
 	revRow := strings.TrimSuffix(rev.Render("> both"), "\x1b[0m")
-	if v := m.View(); strings.Contains(v, rev.Render("[ run ]")) || !strings.Contains(v, revRow) {
+	revRun := good.Reverse(true).Render("[ run ]")
+	if v := m.View(); strings.Contains(v, revRun) || !strings.Contains(v, revRow) {
 		t.Fatalf("items should have focus:\n%s", v)
 	}
 	m, _ = send(m, tab)
 	v := m.View()
-	if !strings.Contains(v, rev.Render("[ run ]")) || strings.Contains(v, revRow) || !strings.Contains(v, "> both") {
+	if !strings.Contains(v, revRun) || strings.Contains(v, revRow) || !strings.Contains(v, "> both") {
 		t.Fatalf("run button should have focus, cursor row only marked:\n%s", v)
 	}
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
 	v = m.View()
-	if !strings.Contains(v, rev.Render("[ back ]")) || strings.Contains(v, rev.Render("[ run ]")) || !strings.Contains(v, "cmd_delete") {
+	if !strings.Contains(v, rev.Render("[ back ]")) || strings.Contains(v, revRun) || !strings.Contains(v, "cmd_delete") {
 		t.Fatalf("right should move to back and leave the action alone:\n%s", v)
 	}
 	m = press(m, "down")

@@ -223,7 +223,22 @@ var (
 	bold  = lipgloss.NewStyle().Bold(true)
 	faint = lipgloss.NewStyle().Faint(true)
 	rev   = lipgloss.NewStyle().Reverse(true)
+
+	// The colours are the terminal's own ANSI colours, so they follow its
+	// theme; NO_COLOR turns them off. Cursor rows stay plain reverse video.
+	heading = bold.Foreground(lipgloss.Color("6"))
+	good    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	caution = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	danger  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 )
+
+// paint renders s in st; an empty s stays empty.
+func paint(st lipgloss.Style, s string) string {
+	if s == "" {
+		return ""
+	}
+	return st.Render(s)
+}
 
 func (m Model) rule() string { return faint.Render(strings.Repeat("─", m.width)) }
 
@@ -247,6 +262,14 @@ func checkbox(on bool) string {
 	return "[ ]"
 }
 
+// box is the checkbox, green when on, plain on the cursor row.
+func box(on, cur bool) string {
+	if on && !cur {
+		return good.Render(checkbox(on))
+	}
+	return checkbox(on)
+}
+
 func (m Model) listScreen() string {
 	rows := m.navRows()
 	cursor := m.listIndex(rows)
@@ -254,7 +277,7 @@ func (m Model) listScreen() string {
 	var body []string
 	curLine := 0
 	for _, g := range m.groups() {
-		body = append(body, m.twoCol(bold.Render("▾ "+Visible(g.name)), HumanSize(g.total)+"  "))
+		body = append(body, m.twoCol(heading.Render("▾ "+Visible(g.name)), HumanSize(g.total)+"  "))
 		for _, r := range g.rows {
 			if len(rows) > 0 && sameRow(r, rows[cursor]) {
 				curLine = len(body)
@@ -264,7 +287,7 @@ func (m Model) listScreen() string {
 	}
 
 	head := []string{
-		m.twoCol(" "+bold.Render("mac-cleanup"), m.freeText()+" "),
+		m.twoCol(" "+heading.Render("mac-cleanup"), m.freeText()+" "),
 		" [Space]",
 	}
 	if done := len(m.results); done < len(m.scripts) {
@@ -279,7 +302,7 @@ func (m Model) listScreen() string {
 	n, size := m.selectedTotals()
 	var foot []string
 	for _, f := range m.scanFailures() {
-		foot = append(foot, Visible("scan failed: "+f.Script+": "+firstLine(f.Err.Error())))
+		foot = append(foot, danger.Render(Visible("scan failed: "+f.Script+": "+firstLine(f.Err.Error()))))
 	}
 	foot = append(foot, m.rule())
 	foot = append(foot, detail...)
@@ -313,17 +336,17 @@ func (m Model) rowLine(r row, cur bool) string {
 		return mark + "    " + Visible(r.view) + "  (" + plural(r.count, "folder") + ")  " + HumanSize(r.size) + "  enter to open"
 	}
 	it := r.item
-	tail := "  " + gradeLabel(it.Grade)
+	grade, warn := gradeLabel(it.Grade), ""
 	if len(it.Warnings) > 0 {
-		tail += "  ⚠ " + Visible(it.Warnings[0])
+		warn = "  ⚠ " + Visible(it.Warnings[0])
 	}
-	size := HumanSize(it.Size)
+	tail := "  " + grade + warn
 	nameW := max(m.width-len(mark)-4-1-9-lipgloss.Width(tail), 8)
-	line := mark + checkbox(m.selected[it.Key()]) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(size, 9) + tail
+	line := mark + box(m.selected[it.Key()], cur) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(HumanSize(it.Size), 9)
 	if cur {
-		return rev.Render(line)
+		return rev.Render(line + tail)
 	}
-	return line
+	return line + "  " + gradeStyle(it.Grade).Render(grade) + paint(caution, warn)
 }
 
 func padLeft(s string, w int) string {
@@ -338,7 +361,7 @@ const detailLines = 4
 func (m Model) detail(r row) []string {
 	out := make([]string, detailLines)
 	if r.view != "" {
-		out[0] = "  " + bold.Render(Visible(r.view))
+		out[0] = "  " + heading.Render(Visible(r.view))
 		out[1] = "  " + plural(r.count, "folder") + ", press enter to choose among them."
 		return out
 	}
@@ -347,7 +370,7 @@ func (m Model) detail(r row) []string {
 	if len(it.Paths) > 0 {
 		path = "   " + Visible(it.Paths[0])
 	}
-	out[0] = "  " + bold.Render(Visible(it.Name)) + path
+	out[0] = "  " + heading.Render(Visible(it.Name)) + path
 	for i, l := range wrap(Visible(it.Explain), m.width-2, detailLines-1) {
 		out[i+1] = "  " + l
 	}
@@ -372,14 +395,14 @@ func (m Model) viewScreen() string {
 			mark = "> "
 		}
 		nameW := max(m.width-len(mark)-4-1-9, 8)
-		line := mark + checkbox(m.selected[it.Key()]) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(HumanSize(it.Size), 9)
+		line := mark + box(m.selected[it.Key()], i == cur) + " " + fit(Visible(it.Name), nameW) + " " + padLeft(HumanSize(it.Size), 9)
 		if i == cur {
 			line = rev.Render(line)
 		}
 		body = append(body, line)
 	}
 	head := []string{
-		m.twoCol(" "+bold.Render(Visible(m.view)), "selected: "+itoa(selN)+" of "+itoa(len(items))+", "+HumanSize(selSize)+" "),
+		m.twoCol(" "+heading.Render(Visible(m.view)), "selected: "+itoa(selN)+" of "+itoa(len(items))+", "+HumanSize(selSize)+" "),
 		m.rule(),
 	}
 	detail := make([]string, detailLines)
