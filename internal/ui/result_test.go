@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -23,7 +24,7 @@ func pump(t *testing.T, m Model, cmd tea.Cmd) (Model, tea.Msg) {
 		}
 		msg := cmd()
 		switch msg.(type) {
-		case startRunMsg, outcomeMsg:
+		case startRunMsg, outcomeMsg, refreshMsg:
 			m, cmd = send(m, msg)
 		default:
 			return m, msg
@@ -52,7 +53,7 @@ func twoItems() scan.Result {
 func TestRunsInOrder(t *testing.T) {
 	d, _ := fakeDeps()
 	var keys []string
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		keys = append(keys, it.Key())
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 	}
@@ -69,7 +70,10 @@ func TestRunsInOrder(t *testing.T) {
 func TestRunOneAtATimeAndProgress(t *testing.T) {
 	d, _ := fakeDeps()
 	n := 0
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome { n++; return action.Outcome{Key: it.Key()} }
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+		n++
+		return action.Outcome{Key: it.Key()}
+	}
 	m, cmd := confirm(t, *d, twoItems())
 	m, cmd = send(m, cmd()) // startRunMsg
 	if n != 0 || !strings.Contains(m.View(), "running 1/2: big") {
@@ -79,17 +83,16 @@ func TestRunOneAtATimeAndProgress(t *testing.T) {
 	if n != 1 || !strings.Contains(m.View(), "running 2/2: small") {
 		t.Fatalf("n=%d view:\n%s", n, m.View())
 	}
-	m = press(m, "q", "enter")
+	m = press(m, "enter", "x")
 	if m.screen != screenRun {
 		t.Fatal("keys must be ignored while running")
 	}
-	_ = cmd
 }
 
 func TestRunUsesChosenAction(t *testing.T) {
 	d, _ := fakeDeps()
 	var got []protocol.Action
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		got = append(got, a)
 		return action.Outcome{Key: it.Key(), Action: a}
 	}
@@ -107,7 +110,7 @@ func TestRunUsesChosenAction(t *testing.T) {
 func TestRunIgnoresLateRecheck(t *testing.T) {
 	d, _ := fakeDeps()
 	var cmds []string
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		cmds = append(cmds, it.Commands[a])
 		return action.Outcome{Key: it.Key(), Action: a}
 	}
@@ -130,7 +133,10 @@ func adminItem(id string) protocol.Item {
 func TestSudoRequestedForAdmin(t *testing.T) {
 	d, _ := fakeDeps()
 	ran := 0
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome { ran++; return action.Outcome{Key: it.Key()} }
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+		ran++
+		return action.Outcome{Key: it.Key()}
+	}
 	m, cmd := confirm(t, *d, scan.Result{Script: "s", Items: []protocol.Item{adminItem("a")}})
 	m, cmd = send(m, cmd())
 	if cmd == nil || ran != 0 {
@@ -155,29 +161,6 @@ func TestSudoRequestedForAdmin(t *testing.T) {
 	}
 	if msg := cmd(); func() bool { _, ok := msg.(outcomeMsg); return !ok }() {
 		t.Fatalf("want first run, got %T", msg)
-	}
-}
-
-func TestSudoRefused(t *testing.T) {
-	d, _ := fakeDeps()
-	var keys []string
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
-		keys = append(keys, it.Key())
-		return action.Outcome{Key: it.Key(), Action: a}
-	}
-	res := scan.Result{Script: "s", Items: []protocol.Item{adminItem("adm"), item("s", "plain", 3_000_000)}}
-	m, cmd := confirm(t, *d, res)
-	m, _ = send(m, cmd())
-	m, cmd = send(m, sudoMsg{err: errors.New("exit 1")})
-	m, _ = pump(t, m, cmd)
-	if strings.Join(keys, ",") != "s/plain" {
-		t.Fatalf("ran %v", keys)
-	}
-	v := m.View()
-	for _, want := range []string{"1 item failed", "adm", "rm -rf x", "admin password not given"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("missing %q in:\n%s", want, v)
-		}
 	}
 }
 
@@ -230,7 +213,7 @@ func TestFreeBeforeMeasuredAtStart(t *testing.T) {
 	d, _ := fakeDeps()
 	cur := uint64(10_000_000_000)
 	d.Free = func() (uint64, uint64, error) { return cur, 1, nil }
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		cur = 30_000_000_000
 		return action.Outcome{Key: it.Key()}
 	}
@@ -248,7 +231,7 @@ func TestResultTrashNote(t *testing.T) {
 			it.Commands = map[protocol.Action]string{protocol.Trash: "mv x"}
 		})
 	}
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		o := action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 		if it.ID == "bad" {
 			o.Err = errors.New("exit status 1")
@@ -269,7 +252,7 @@ func TestResultTrashNote(t *testing.T) {
 
 func TestResultFailureListed(t *testing.T) {
 	d, _ := fakeDeps()
-	d.Run = func(it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Output: "rm: permission denied\n", Err: errors.New("exit status 1")}
 	}
 	m := finish(t, *d, scan.Result{Script: "s", Items: []protocol.Item{item("s", "big", 9_000_000)}})

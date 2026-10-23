@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"mac-cleanup/internal/protocol"
 )
@@ -60,5 +61,26 @@ func TestFreeSpace(t *testing.T) {
 	}
 	if free == 0 || free > total {
 		t.Errorf("free=%d total=%d", free, total)
+	}
+}
+
+func TestRunCancelKillsProcessGroup(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "marker")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Outcome, 1)
+	go func() { done <- Run(ctx, item("sleep 30; touch '"+marker+"'"), protocol.Delete) }()
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case o := <-done:
+		if o.Err == nil || o.Err.Error() != "interrupted" {
+			t.Errorf("Err = %v, want interrupted", o.Err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of cancel")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("marker exists: command kept running")
 	}
 }

@@ -19,22 +19,26 @@ const MinSize = 1_000_000
 // Deps are the side effects the UI uses, replaceable in tests.
 type Deps struct {
 	Scan    func(script string) scan.Result
-	Run     func(it protocol.Item, a protocol.Action) action.Outcome
+	Run     func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome
 	Reveal  func(path string) error
 	Free    func() (free, total uint64, err error)
 	SudoCmd func() *exec.Cmd
+	// SudoRefresh renews the sudo ticket without prompting; it errors if the
+	// ticket has expired.
+	SudoRefresh func() error
 }
 
 // DefaultDeps wires the real scanner, runner and free-space probe for freePath.
 func DefaultDeps(freePath string) Deps {
 	return Deps{
 		Scan: func(s string) scan.Result { return scan.Run(context.Background(), s) },
-		Run: func(it protocol.Item, a protocol.Action) action.Outcome {
-			return action.Run(context.Background(), it, a)
+		Run: func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+			return action.Run(ctx, it, a)
 		},
-		Reveal:  action.Reveal,
-		Free:    func() (uint64, uint64, error) { return action.FreeSpace(freePath) },
-		SudoCmd: action.SudoCmd,
+		Reveal:      action.Reveal,
+		Free:        func() (uint64, uint64, error) { return action.FreeSpace(freePath) },
+		SudoCmd:     action.SudoCmd,
+		SudoRefresh: action.SudoRefresh,
 	}
 }
 
@@ -119,9 +123,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startRun(msg)
 	case sudoMsg:
 		return m.afterSudo(msg)
+	case refreshMsg:
+		return m.afterRefresh(msg)
 	case outcomeMsg:
 		return m.afterOutcome(msg)
 	case tea.KeyMsg:
+		if m.screen == screenRun {
+			return m.updateRun(msg)
+		}
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -132,8 +141,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateView(msg)
 		case screenReview:
 			return m.updateReview(msg)
-		case screenRun:
-			return m, nil
 		case screenResult:
 			return m.updateResult(msg)
 		}

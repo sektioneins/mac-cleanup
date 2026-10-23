@@ -3,9 +3,11 @@ package action
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
+	"time"
 
 	"mac-cleanup/internal/protocol"
 )
@@ -28,13 +30,26 @@ func Run(ctx context.Context, it protocol.Item, a protocol.Action) Outcome {
 		return o
 	}
 	o.Command = cmd
-	out, err := exec.CommandContext(ctx, "/bin/bash", "-c", cmd).CombinedOutput()
+	c := exec.CommandContext(ctx, "/bin/bash", "-c", cmd)
+	// Own process group, so a cancel kills the command and everything it
+	// started. SIGKILL: a stopped or tty-blocked child would ignore SIGINT.
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+	c.WaitDelay = time.Second
+	out, err := c.CombinedOutput()
 	o.Output, o.Err = string(out), err
+	if err != nil && ctx.Err() != nil {
+		o.Err = errors.New("interrupted")
+	}
 	return o
 }
 
 // SudoCmd returns the command that primes sudo credentials.
 func SudoCmd() *exec.Cmd { return exec.Command("sudo", "-v") }
+
+// SudoRefresh renews the sudo ticket without prompting; it fails if the
+// ticket has expired.
+func SudoRefresh() error { return exec.Command("sudo", "-n", "-v").Run() }
 
 // FreeSpace reports available and total bytes of the volume holding path.
 func FreeSpace(path string) (free, total uint64, err error) {
