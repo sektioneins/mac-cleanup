@@ -9,22 +9,32 @@ import (
 	"mac-cleanup/internal/protocol"
 )
 
-const fakeSdkmanager = `cat <<'OUT'
-Installed packages:
-  Path                                        | Version | Description                                | Location
-  -------                                     | ------- | -------                                    | -------
-  platforms;android-34                        | 3       | Android SDK Platform 34                    | platforms/android-34
-  system-images;android-30;google_apis;x86_64 | 10      | Google APIs Intel x86_64 Atom System Image | system-images/android-30/google_apis/x86_64
-  system-images;android-34;google_apis_playstore;arm64-v8a | 2 | Google Play ARM 64 v8a System Image | system-images/android-34/google_apis_playstore/arm64-v8a
-OUT`
+// androidSDK creates a fake sdkmanager that records every call in
+// sdkmanager.calls, and returns the SDK root and the sdkmanager path.
+func androidSDK(e *env) (string, string) {
+	sdk := filepath.Join(e.Home, "Library/Android/sdk")
+	sdkmanager := filepath.Join(sdk, "cmdline-tools/latest/bin/sdkmanager")
+	e.exe(sdkmanager, `echo "$*" >> "$0.calls"`)
+	return sdk, sdkmanager
+}
+
+// androidImage creates an installed image directory with the given marker
+// file (package.xml or source.properties; empty for none).
+func androidImage(e *env, sdk, rel, marker string) string {
+	dir := filepath.Join(sdk, "system-images", rel)
+	e.write(filepath.Join(dir, "system.img"), 32)
+	if marker != "" {
+		e.write(filepath.Join(dir, marker), 1)
+	}
+	return dir
+}
 
 func TestAndroidImages(t *testing.T) {
 	e := newEnv(t)
-	sdk := filepath.Join(e.Home, "Library/Android/sdk")
-	sdkmanager := filepath.Join(sdk, "cmdline-tools/latest/bin/sdkmanager")
-	e.exe(sdkmanager, fakeSdkmanager)
-	e.write(filepath.Join(sdk, "system-images/android-30/google_apis/x86_64/system.img"), 32)
-	e.write(filepath.Join(sdk, "system-images/android-34/google_apis_playstore/arm64-v8a/system.img"), 32)
+	sdk, sdkmanager := androidSDK(e)
+	androidImage(e, sdk, "android-30/google_apis/x86_64", "package.xml")
+	androidImage(e, sdk, "android-34/google_apis_playstore/arm64-v8a", "source.properties")
+	androidImage(e, sdk, "android-35/default/arm64-v8a", "")
 	e.write(filepath.Join(sdk, "platforms/android-34/android.jar"), 32)
 	e.running("qemu-system")
 	items := e.run("android-images")
@@ -43,7 +53,7 @@ func TestAndroidImages(t *testing.T) {
 		if len(it.Paths) != 1 || it.Paths[0] != filepath.Join(sdk, w.rel) {
 			t.Errorf("paths = %v", it.Paths)
 		}
-		if it.Size < 32768 || it.Explain == "" || len(it.Warnings) != 1 {
+		if it.Size < 32768 || it.Explain == "" || len(it.Warnings) != 1 || it.Admin {
 			t.Errorf("unexpected fields %+v", it)
 		}
 		wantCmd := "'" + sdkmanager + "' --uninstall '" + w.id + "'"
@@ -53,6 +63,51 @@ func TestAndroidImages(t *testing.T) {
 		if len(it.Commands) != 1 {
 			t.Errorf("commands = %v, want only delete", it.Commands)
 		}
+	}
+	if _, err := os.Stat(sdkmanager + ".calls"); err == nil {
+		t.Error("sdkmanager was called during the scan")
+	}
+}
+
+func TestAndroidNoSdkmanager(t *testing.T) {
+	e := newEnv(t)
+	sdk := filepath.Join(e.Home, "Library/Android/sdk")
+	androidImage(e, sdk, "android-30/google_apis/x86_64", "package.xml")
+	if items := e.run("android-images"); len(items) != 0 {
+		t.Fatalf("got %d items, want 0", len(items))
+	}
+}
+
+func TestAndroidNotWritable(t *testing.T) {
+	e := newEnv(t)
+	sdk, _ := androidSDK(e)
+	dir := androidImage(e, sdk, "android-30/google_apis/x86_64", "package.xml")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	items := e.run("android-images")
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	want := dir + " is not writable by you"
+	if it := items[0]; it.Admin || len(it.Warnings) != 1 || it.Warnings[0] != want {
+		t.Errorf("admin %v, warnings %q, want [%q]", it.Admin, it.Warnings, want)
+	}
+}
+
+func TestAndroidUnreadable(t *testing.T) {
+	e := newEnv(t)
+	sdk, _ := androidSDK(e)
+	androidImage(e, sdk, "android-30/google_apis/x86_64", "package.xml")
+	images := filepath.Join(sdk, "system-images")
+	if err := os.Chmod(images, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(images, 0o755) })
+	stdout, stderr := e.runFail("android-images")
+	if stdout != "" || !strings.Contains(stderr, images) {
+		t.Errorf("stdout %q, stderr %q", stdout, stderr)
 	}
 }
 
