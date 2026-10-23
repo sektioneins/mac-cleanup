@@ -25,7 +25,7 @@ Each cleanup target is a small bash script in `scripts/targets/`:
 | Browsers | Chrome caches, Chrome updater download cache |
 | App data | Microsoft Teams caches, ON1 browse cache |
 | Library | each folder in `~/Library/Caches` (in a separate sub-list), logs older than 30 days |
-| Leftovers | Logic Pro and MainStage content with neither app installed |
+| Leftovers | Logic Pro and MainStage content with neither app installed; data of deleted apps in `~/Library` (by bundle id, quiet for 90 days) and plain-name `~/Library` folders that no installed app matches and nothing has used for a year, both in a separate sub-list |
 | Unused apps | apps not opened for over a year, or never opened as far as macOS knows |
 
 Items under 1 MB are not listed. If something a target looks for isn't there, the target reports nothing.
