@@ -287,14 +287,6 @@ func TestInventoryEmptyDump(t *testing.T) {
 	}
 }
 
-func TestInventoryNoInstalledIDsIsFine(t *testing.T) {
-	e := newEnv(t)
-	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
-	if ok, msg := e.inventoryErr(t.TempDir()); !ok {
-		t.Errorf("failed: %s", msg)
-	}
-}
-
 func TestUnclaimedNoIDs(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir()
@@ -342,7 +334,7 @@ func TestInventoryBrokenPlist(t *testing.T) {
 
 func TestInventoryPlistWithoutID(t *testing.T) {
 	e := newEnv(t)
-	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	otherApp(e, regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
 	e.app(filepath.Join(e.Root, "Applications/Good.app"), "com.example.good", "Good")
 	noID := filepath.Join(e.Root, "Applications/NoID.app/Contents/Info.plist")
 	e.mkparent(noID)
@@ -358,6 +350,102 @@ func TestInventoryPlistWithoutID(t *testing.T) {
 		t.Fatalf("failed: %s", msg)
 	}
 	if ids := readLines(t, filepath.Join(dir, "ids")); !contains(ids, "com.example.good") {
+		t.Errorf("ids = %q", ids)
+	}
+}
+
+func TestInventoryNestedBundles(t *testing.T) {
+	e := newEnv(t)
+	// One app found by the Info.plist scan, one only by the registry.
+	scanned := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(scanned, "com.example.app", "Example")
+	e.app(filepath.Join(scanned, "Contents/XPCServices/Renderer.xpc"), "com.example.renderer", "Renderer")
+	e.app(filepath.Join(scanned, "Contents/Frameworks/Core.framework/Versions/A/XPCServices/Deep.xpc"), "com.example.deep", "Deep")
+	e.app(filepath.Join(scanned, "Contents/PlugIns/Share.appex"), "com.example.share", "Share")
+	e.app(filepath.Join(scanned, "Contents/Library/LoginItems/Helper.app"), "com.example.helper", "Helper")
+	// No Info.plist, and an Info.plist without an id: skipped.
+	e.mkparent(filepath.Join(scanned, "Contents/XPCServices/Bare.xpc/x"))
+	noID := filepath.Join(scanned, "Contents/XPCServices/NoID.xpc/Contents/Info.plist")
+	e.mkparent(noID)
+	if err := os.WriteFile(noID, []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleName</key><string>NoID</string></dict></plist>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	registered := filepath.Join(e.Root, "Opt/Registered.app")
+	e.app(registered, "com.example.registered", "Registered")
+	e.app(filepath.Join(registered, "Contents/XPCServices/Agent.xpc"), "com.example.agent", "Agent")
+	// A stale record's folder is not an installed app.
+	gone := filepath.Join(e.Root, "Opt/Gone.app")
+	e.app(filepath.Join(gone, "Contents/XPCServices/Old.xpc"), "com.example.oldxpc", "Old")
+	e.registry(
+		regRecord{Path: scanned, ID: "com.example.app", Name: "Example"},
+		regRecord{Path: registered, ID: "com.example.registered", Name: "Registered"},
+		regRecord{Path: gone + ".missing", ID: "com.example.gone", Name: "Gone"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	ids := readLines(t, filepath.Join(dir, "ids"))
+	for _, want := range []string{"com.example.renderer", "com.example.deep", "com.example.share", "com.example.helper", "com.example.agent"} {
+		if !contains(ids, want) {
+			t.Errorf("ids lack %q: %q", want, ids)
+		}
+	}
+	if contains(ids, "com.example.oldxpc") || contains(ids, "com.example.gone") {
+		t.Errorf("ids contain a stale app's bundle: %q", ids)
+	}
+}
+
+func TestInventoryBrokenNestedPlist(t *testing.T) {
+	e := newEnv(t)
+	app := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(app, "com.example.app", "Example")
+	e.write(filepath.Join(app, "Contents/XPCServices/Bad.xpc/Contents/Info.plist"), 1)
+	e.registry(regRecord{Path: app, ID: "com.example.app", Name: "Example"})
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || !strings.Contains(msg, "Bad.xpc") {
+		t.Errorf("ok = %v, stderr = %q; want a failure naming the bundle", ok, msg)
+	}
+}
+
+func TestInventoryNoInstalledRecords(t *testing.T) {
+	e := newEnv(t)
+	// Only stale records.
+	e.registry(regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old"})
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || msg == "" {
+		t.Errorf("stale only: ok = %v, stderr = %q; want a failure with a message", ok, msg)
+	}
+	// Records with an identifier but no path.
+	e.registry(regRecord{ID: "com.example.nopath", Name: "NoPath"})
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || msg == "" {
+		t.Errorf("no path: ok = %v, stderr = %q; want a failure with a message", ok, msg)
+	}
+}
+
+func TestInventoryUnreadableRegistryApp(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "com.example.other", "Other")
+	// An app known only to the registry, with a folder find can't read.
+	reg := filepath.Join(e.Root, "Opt/Registered.app")
+	e.app(reg, "com.example.registered", "Registered")
+	locked := filepath.Join(reg, "Contents/XPCServices/Locked.xpc")
+	e.app(filepath.Join(reg, "Contents/XPCServices/Fine.xpc"), "com.example.fine", "Fine")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	e.registry(
+		regRecord{Path: other, ID: "com.example.other", Name: "Other"},
+		regRecord{Path: reg, ID: "com.example.registered", Name: "Registered"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if ids := readLines(t, filepath.Join(dir, "ids")); !contains(ids, "com.example.fine") {
 		t.Errorf("ids = %q", ids)
 	}
 }

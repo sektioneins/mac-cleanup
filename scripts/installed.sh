@@ -41,15 +41,27 @@ _mc_registry_records() {
 # _mc_emit KIND VALUE: one tagged line for the file splitter.
 _mc_emit() { printf '%s%s%s\n' "$1" "$_MC_US" "$2"; }
 
+# _mc_plist_xml PLIST: set _MC_XML to the plist as XML. Status 1 when it does
+# not parse or its top level is not a dictionary (plutil -lint accepts any
+# text as an old-style plist, so the dictionary is checked as well).
+_mc_plist_xml() {
+	_MC_XML=$(plutil -convert xml1 -o - "$1" 2>/dev/null) || _MC_XML=""
+	case $_MC_XML in
+	*"<dict>"* | *"<dict/>"*) return 0 ;;
+	esac
+	return 1
+}
+
 # _mc_plist_apps ERRFILE: tagged lines for the apps found by their Info.plist.
 # Problems that could hide an installed id (unreadable folder, unparsable
 # Info.plist) become `error` lines.
 _mc_plist_apps() {
-	local errf=$1 base app plist rel dirpart part key v file xml
+	local errf=$1 base app plist rel dirpart part key v file
 	for base in "$MC_ROOT/Applications" "$HOME/Applications" "$MC_ROOT/System/Applications"; do
 		[ -d "$base" ] || continue
 		: >"$errf"
 		find "$base" -maxdepth 3 -name '*.app' -prune -print 2>"$errf" | while IFS= read -r app; do
+			_mc_emit apppath "$app"
 			file=${app##*/}
 			_mc_emit names "${file%.app}"
 			rel=${app#"$base"/}
@@ -68,16 +80,10 @@ EOF
 				fi
 				continue
 			fi
-			# plutil -lint accepts any text as an old-style plist, so check
-			# that the file parses and that its top level is a dictionary.
-			xml=$(plutil -convert xml1 -o - "$plist" 2>/dev/null) || xml=""
-			case $xml in
-			*"<dict>"* | *"<dict/>"*) ;;
-			*)
+			if ! _mc_plist_xml "$plist"; then
 				_mc_emit error "cannot parse $plist"
 				continue
-				;;
-			esac
+			fi
 			# Keys that are absent are skipped: such a bundle has no id or name.
 			for key in CFBundleIdentifier CFBundleName CFBundleDisplayName CFBundleExecutable; do
 				v=$(plutil -extract "$key" raw -o - "$plist" 2>/dev/null) || continue
@@ -106,6 +112,10 @@ _mc_registry_tagged() {
 			[ -n "$id" ] && [ -n "$path" ] && _mc_emit stale "$id	$name"
 			continue
 		fi
+		_mc_emit installed 1
+		case $path in
+		*.app) [ -d "$path" ] && _mc_emit regpath "$path" ;;
+		esac
 		_mc_emit ids "$id"
 		_mc_emit teams "$team"
 		_mc_emit names "$name"
@@ -134,6 +144,42 @@ _mc_apple_services() {
 	done
 }
 
+# _mc_nested_ids APPLIST STRICT: tagged lines for the bundle ids of the .xpc,
+# .appex and .app bundles nested in the installed apps listed in APPLIST (one
+# path per line). With STRICT=1 a folder that can't be read is an error; for
+# the registry's apps (which can sit in protected places like ~/Documents) it
+# is skipped. LaunchServices does not register them, but a sandboxed one has its
+# own ~/Library/Containers folder. One plutil call per bundle; a bundle without
+# an Info.plist or without an id is skipped, an unparsable Info.plist is an
+# error.
+_mc_nested_ids() {
+	local app b plist err
+	local re='<key>CFBundleIdentifier</key>[[:space:]]*<string>([^<]+)</string>'
+	err=$(mktemp "${TMPDIR:-/tmp}/mc-nested.XXXXXX") || return 1
+	sort -u "$1" | while IFS= read -r app; do
+		[ -d "$app/Contents" ] || continue
+		: >"$err"
+		find "$app/Contents" -maxdepth 7 -type d \( -name '*.xpc' -o -name '*.appex' -o -name '*.app' \) -print 2>"$err" |
+			while IFS= read -r b; do
+				plist="$b/Contents/Info.plist"
+				[ -f "$plist" ] || plist="$b/Info.plist"
+				[ -f "$plist" ] || continue
+				if ! _mc_plist_xml "$plist"; then
+					_mc_emit error "cannot parse $plist"
+					continue
+				fi
+				[[ $_MC_XML =~ $re ]] && _mc_emit ids "${BASH_REMATCH[1]}"
+			done
+		[ "$2" = 1 ] && [ -s "$err" ] && _mc_emit error "cannot read $app"
+	done
+	rm -f "$err"
+}
+
+# _mc_split DIR: file the tagged lines from stdin into DIR/<tag>.raw.
+_mc_split() {
+	awk -F"$_MC_US" -v d="$1" '{ print substr($0, length($1) + 2) >> (d "/" $1 ".raw") }'
+}
+
 # mc_inventory DIR: write the installed-app lists ids, teams, names, vendors,
 # apple and stale to DIR. Fails when the Launch Services registry can't be
 # read.
@@ -144,21 +190,26 @@ mc_inventory() {
 		rm -f "$dir/dump.raw"
 		return 1
 	fi
-	if ! grep -q '^identifier:' "$dir/dump.raw"; then
-		echo "mac-cleanup: the Launch Services registry has no usable records" >&2
-		rm -f "$dir/dump.raw"
-		return 1
-	fi
-	for f in ids teams names apple stale error; do : >"$dir/$f.raw"; done
+	for f in ids teams names apple stale error apppath regpath installed; do : >"$dir/$f.raw"; done
 	{
 		_mc_registry_tagged "$dir/dump.raw"
 		_mc_plist_apps "$dir/find.err"
 		_mc_apple_services
-	} | awk -F"$_MC_US" -v d="$dir" '{ print substr($0, length($1) + 2) >> (d "/" $1 ".raw") }'
+	} | _mc_split "$dir"
 	rm -f "$dir/find.err"
+	_mc_nested_ids "$dir/apppath.raw" 1 | _mc_split "$dir"
+	# Apps already scanned strictly are not scanned again.
+	sort -u "$dir/regpath.raw" | grep -vxF -f "$dir/apppath.raw" >"$dir/regpath.new"
+	_mc_nested_ids "$dir/regpath.new" 0 | _mc_split "$dir"
+	rm -f "$dir/regpath.new"
 	if [ -s "$dir/error.raw" ]; then
 		sed 's/^/mac-cleanup: /' "$dir/error.raw" >&2
-		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error}.raw
+		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
+		return 1
+	fi
+	if [ ! -s "$dir/installed.raw" ]; then
+		echo "mac-cleanup: the Launch Services registry has no installed app records" >&2
+		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
 		return 1
 	fi
 
@@ -168,7 +219,7 @@ mc_inventory() {
 	grep -v -e '^$' -e '^0000000000$' "$dir/teams.raw" | sort -u >"$dir/teams"
 	awk -F'\t' 'BEGIN { OFS = "\t" } { $1 = tolower($1); print }' "$dir/stale.raw" >"$dir/stale"
 	awk -F. 'NF >= 3 { print $2 }' "$dir/ids" | sort -u >"$dir/vendors"
-	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error}.raw
+	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
 	return 0
 }
 
