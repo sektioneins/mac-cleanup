@@ -45,18 +45,29 @@ func Run(ctx context.Context, it protocol.Item, a protocol.Action) Outcome {
 	c.WaitDelay = time.Second
 	out, err := c.CombinedOutput()
 	o.Output, o.Err = string(out), err
-	switch {
-	case err != nil && ctx.Err() != nil:
-		o.Err = errors.New("interrupted")
-		// Signal 0 to the group: EPERM means a member we may not signal (a
-		// privileged child) is still there.
-		if c.Process != nil && groupStillThere(c.Process.Pid) {
-			o.Err = errors.New("interrupted, but part of the command could not be stopped and may still be running")
-		}
-	case errors.Is(err, exec.ErrWaitDelay):
-		o.Err = errors.New("finished, but a background process kept its output open")
-	}
+	success := c.ProcessState != nil && c.ProcessState.Success()
+	o.Err = classify(err, success, ctx.Err() != nil, func() bool { return c.Process != nil && groupStillThere(c.Process.Pid) })
 	return o
+}
+
+// classify turns the result of Wait into the outcome error. A command that
+// exited 0 succeeded, whatever happened to the cancel that raced with its end
+// (on macOS that cancel fails with EPERM against the zombie leader). Cancel
+// does not map EPERM to "done": it could also mean a privileged survivor,
+// which survivors() reports after Wait.
+func classify(err error, success, cancelled bool, survivors func() bool) error {
+	switch {
+	case errors.Is(err, exec.ErrWaitDelay):
+		return errors.New("finished, but a background process kept its output open")
+	case success || err == nil:
+		return nil
+	case cancelled:
+		if survivors() {
+			return errors.New("interrupted, but part of the command could not be stopped and may still be running")
+		}
+		return errors.New("interrupted")
+	}
+	return err
 }
 
 // groupStillThere reports whether process group pgid has a member we may not

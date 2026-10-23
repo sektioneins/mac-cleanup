@@ -3,7 +3,10 @@ package ui
 import (
 	"context"
 	"errors"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -390,5 +393,36 @@ func TestCtrlCOnReviewAfterEnterDoesNotQuit(t *testing.T) {
 	m, _ = pump(t, m, cmd)
 	if len(*ran) != 2 || m.screen != screenResult {
 		t.Fatalf("ran=%v screen=%v", *ran, m.screen)
+	}
+}
+
+func TestRunScreenWrapKeepsEscapesWhole(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(prev)
+	d, _ := fakeDeps()
+	counting(d)
+	m, cmd := confirm(t, *d, twoItems())
+	m, _ = send(m, cmd())
+	stopped, _ := send(m, ctrlC)
+	sgr := regexp.MustCompile(`^\x1b\[[0-9;]*m`)
+	for _, v := range []Model{m, stopped} {
+		for w := 28; w <= 35; w++ {
+			v.width = w
+			out := v.View()
+			if !strings.Contains(out, "\x1b[") {
+				t.Fatal("test needs styled output")
+			}
+			for _, line := range strings.Split(out, "\n") {
+				for i := 0; i < len(line); i++ {
+					if line[i] == 0x1b && !sgr.MatchString(line[i:]) {
+						t.Fatalf("width %d: partial escape in %q", w, line)
+					}
+				}
+				if lipgloss.Width(line) > w {
+					t.Fatalf("width %d: line too wide: %q", w, line)
+				}
+			}
+		}
 	}
 }

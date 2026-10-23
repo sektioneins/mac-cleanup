@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"mac-cleanup/internal/action"
 
@@ -227,7 +228,19 @@ func (m Model) updateRun(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) runScreen() string {
 	r := m.run
-	lines := []string{" " + bold.Render("Running"), ""}
+	// Lines are wrapped as plain text and styled afterwards, so a wrap can
+	// never split an escape sequence.
+	type line struct {
+		text  string
+		style lipgloss.Style
+	}
+	plain := lipgloss.NewStyle()
+	lines := []line{{" Running", bold}, {"", plain}}
+	add := func(st lipgloss.Style, texts ...string) {
+		for _, t := range texts {
+			lines = append(lines, line{t, st})
+		}
+	}
 	name := ""
 	if r.next < len(r.entries) {
 		name = r.entries[r.next].Item.Name
@@ -235,23 +248,29 @@ func (m Model) runScreen() string {
 	switch {
 	case r.refused != "":
 		for _, l := range strings.Split(r.refused, "\n") {
-			lines = append(lines, "  "+l)
+			add(plain, "  "+l)
 		}
 	case r.stopping && r.inflight && r.entries[r.next].Item.Admin:
-		lines = append(lines, "  stopping after "+name+"… (admin command, cannot be interrupted, waiting for it to finish)")
+		add(plain, "  stopping after "+name+"… (admin command, cannot be interrupted, waiting for it to finish)")
 	case r.stopping && r.inflight:
-		lines = append(lines, "  stopping after "+name+"…", "  "+faint.Render("ctrl+c again interrupts it"))
+		add(plain, "  stopping after "+name+"…")
+		add(faint, "  ctrl+c again interrupts it")
 	case r.stopping:
-		lines = append(lines, "  stopping…")
+		add(plain, "  stopping…")
 	case r.sudo:
-		lines = append(lines, "  waiting for the admin password...")
+		add(plain, "  waiting for the admin password...")
 	case r.next < len(r.entries):
-		lines = append(lines, "  running "+itoa(r.next+1)+"/"+itoa(len(r.entries))+": "+name,
-			"  "+faint.Render("ctrl+c stops after this item"))
+		add(plain, "  running "+itoa(r.next+1)+"/"+itoa(len(r.entries))+": "+name)
+		add(faint, "  ctrl+c stops after this item")
 	}
 	var out []string
 	for _, l := range lines {
-		out = append(out, hardWrap(l, m.width, "", "    ")...)
+		for _, w := range hardWrap(l.text, m.width, "", "    ") {
+			if w != "" {
+				w = l.style.Render(w)
+			}
+			out = append(out, w)
+		}
 	}
 	return strings.Join(out, "\n")
 }

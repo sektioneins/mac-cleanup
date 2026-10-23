@@ -2,7 +2,9 @@ package action
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,5 +104,39 @@ func TestRunBackgroundProcessHoldingOutput(t *testing.T) {
 	o := Run(context.Background(), item("sleep 3 & :"), protocol.Delete)
 	if o.Err == nil || !strings.Contains(o.Err.Error(), "background process kept its output open") {
 		t.Fatalf("Err = %v", o.Err)
+	}
+}
+
+func TestClassify(t *testing.T) {
+	canceling := errors.New("exec: canceling Cmd: operation not permitted")
+	exit1 := errors.New("exit status 1")
+	cases := []struct {
+		name      string
+		err       error
+		success   bool
+		cancelled bool
+		want      string // "" means nil
+	}{
+		{"ok", nil, true, false, ""},
+		{"ok but cancelled late", nil, true, true, ""},
+		{"exit 0, cancel EPERM race", canceling, true, true, ""},
+		{"failed", exit1, false, false, "exit status 1"},
+		{"failed and cancelled", exit1, false, true, "interrupted"},
+		{"killed", errors.New("signal: killed"), false, true, "interrupted"},
+		{"exit 0 but output held open", exec.ErrWaitDelay, true, false, "finished, but a background process kept its output open"},
+		{"exit 0, held open, cancelled", exec.ErrWaitDelay, true, true, "finished, but a background process kept its output open"},
+	}
+	for _, c := range cases {
+		got := classify(c.err, c.success, c.cancelled, func() bool { return false })
+		switch {
+		case c.want == "" && got != nil:
+			t.Errorf("%s: got %v, want nil", c.name, got)
+		case c.want != "" && (got == nil || got.Error() != c.want):
+			t.Errorf("%s: got %v, want %q", c.name, got, c.want)
+		}
+	}
+	got := classify(errors.New("signal: killed"), false, true, func() bool { return true })
+	if got == nil || !strings.Contains(got.Error(), "may still be running") {
+		t.Errorf("survivor: got %v", got)
 	}
 }
