@@ -173,9 +173,28 @@ func TestScanProgress(t *testing.T) {
 	if !strings.Contains(m.View(), "scanning 1/2") {
 		t.Fatal("no progress after one result")
 	}
+	if !strings.Contains(m.View(), "scanning 1/2 "+strings.Repeat("█", 10)+strings.Repeat("░", 10)) {
+		t.Fatalf("no progress bar:\n%s", m.View())
+	}
 	m, _ = send(m, scanMsg(scan.Result{Script: "b"}))
-	if strings.Contains(m.View(), "scanning") {
+	if strings.Contains(m.View(), "scanning") || strings.Contains(m.View(), "░") {
 		t.Fatal("still scanning")
+	}
+}
+
+func TestProgressBar(t *testing.T) {
+	for _, c := range []struct {
+		done, total int
+		want        string
+	}{
+		{0, 3, strings.Repeat("░", 20)},
+		{1, 3, strings.Repeat("█", 6) + strings.Repeat("░", 14)},
+		{3, 3, strings.Repeat("█", 20)},
+		{0, 0, strings.Repeat("░", 20)},
+	} {
+		if got := progressBar(c.done, c.total, 20); got != c.want {
+			t.Errorf("progressBar(%d, %d) = %q, want %q", c.done, c.total, got, c.want)
+		}
 	}
 }
 

@@ -291,7 +291,7 @@ func (m Model) listScreen() string {
 		" [Space]",
 	}
 	if done := len(m.results); done < len(m.scripts) {
-		head[1] += "   scanning " + itoa(done) + "/" + itoa(len(m.scripts))
+		head[1] += "   scanning " + itoa(done) + "/" + itoa(len(m.scripts)) + " " + progressBar(done, len(m.scripts), 20)
 	}
 	head = append(head, m.rule())
 
@@ -310,6 +310,15 @@ func (m Model) listScreen() string {
 		"  selected: "+plural(n, "item")+", "+HumanSize(size)+"   "+faint.Render("space select  o finder  enter review/open  q quit"))
 
 	return strings.Join(m.frame(head, body, foot, curLine), "\n")
+}
+
+// progressBar returns a bar of width cells, filled for done of total.
+func progressBar(done, total, width int) string {
+	filled := 0
+	if total > 0 {
+		filled = min(done*width/total, width)
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 func sameRow(a, b row) bool { return a.view == b.view && a.item.Key() == b.item.Key() }
