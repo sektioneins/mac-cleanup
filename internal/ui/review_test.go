@@ -163,7 +163,7 @@ func TestRecheckClears(t *testing.T) {
 
 func TestRecheckItemGone(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}}, scan.Result{Script: "s", Items: []protocol.Item{item("s", "ok", 5_000_000)}})
-	m, _ = send(m, recheckMsg(scan.Result{Script: "w"}))
+	m, _ = send(m, recheckMsg{res: scan.Result{Script: "w"}})
 	v := m.View()
 	if !strings.Contains(v, "g no longer found") || !strings.Contains(v, "Review: 1 item") || !strings.Contains(v, "[ run ]") {
 		t.Fatalf("view:\n%s", v)
@@ -175,7 +175,7 @@ func TestRecheckItemGone(t *testing.T) {
 
 func TestRecheckFailureKeepsBlock(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}})
-	m, _ = send(m, recheckMsg(scan.Result{Script: "w", Err: errors.New("boom")}))
+	m, _ = send(m, recheckMsg{res: scan.Result{Script: "w", Err: errors.New("boom")}})
 	v := m.View()
 	if !strings.Contains(v, "( run: blocked )") || !strings.Contains(v, "boom") {
 		t.Fatalf("view:\n%s", v)
@@ -278,7 +278,7 @@ func TestEnterSnapshotAndIgnoresLateRecheck(t *testing.T) {
 		t.Fatalf("entries %#v", msg.entries)
 	}
 	changed := both("del-a", "CHANGED")
-	m, _ = send(m, recheckMsg(scan.Result{Script: "s", Items: []protocol.Item{changed}}))
+	m, _ = send(m, recheckMsg{res: scan.Result{Script: "s", Items: []protocol.Item{changed}}})
 	if got := m.reviewItems(); len(got) != 2 || got[0].Commands[protocol.Trash] != "trash-a" {
 		t.Fatal("late recheck applied after enter")
 	}
@@ -288,7 +288,7 @@ func TestRecheckBelowMinSizeNote(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}})
 	small := warned("g")
 	small.Size = 10
-	m, _ = send(m, recheckMsg(scan.Result{Script: "w", Items: []protocol.Item{small}}))
+	m, _ = send(m, recheckMsg{res: scan.Result{Script: "w", Items: []protocol.Item{small}}})
 	v := m.View()
 	if strings.Contains(v, "no longer found") || !strings.Contains(v, "g is now below 1 MB, removed") {
 		t.Fatalf("view:\n%s", v)

@@ -156,8 +156,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pinCursors()
 		m.results = append(m.results, scan.Result(msg))
 	case recheckMsg:
-		if !m.running {
-			m.applyRecheck(scan.Result(msg))
+		if !m.running && msg.gen == m.gen {
+			m.applyRecheck(msg.res)
 		}
 	case freeMsg:
 		m.free, m.hasFree = msg, true

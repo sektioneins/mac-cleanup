@@ -135,3 +135,18 @@ func TestResultHint(t *testing.T) {
 		t.Fatalf("view:\n%s", m.View())
 	}
 }
+
+// A re-check started before the run that ends after a rescan belongs to the
+// earlier scan round and is dropped.
+func TestRescanDropsEarlierRecheck(t *testing.T) {
+	d, _ := fakeDeps()
+	counting(d)
+	m := finish(t, *d, twoItems())
+	stale := recheckMsg{gen: m.gen, res: twoItems()}
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m, _ = send(m, stale)
+	m, _ = send(m, genScanMsg{gen: m.gen, res: twoItems()})
+	if len(m.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(m.results))
+	}
+}

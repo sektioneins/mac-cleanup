@@ -11,8 +11,12 @@ import (
 	"mac-cleanup/internal/scan"
 )
 
-// recheckMsg carries the fresh scan of one script after a re-check.
-type recheckMsg scan.Result
+// recheckMsg carries the fresh scan of one script after a re-check, started in
+// scan round gen.
+type recheckMsg struct {
+	gen int
+	res scan.Result
+}
 
 // runEntry is one confirmed item: exactly the command the review showed.
 type runEntry struct {
@@ -250,8 +254,8 @@ func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 			continue
 		}
 		seen[it.Script] = true
-		script, scanFn := it.Script, m.deps.Scan
-		cmds = append(cmds, func() tea.Msg { return recheckMsg(scanFn(script)) })
+		script, scanFn, gen := it.Script, m.deps.Scan, m.gen
+		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(script)} })
 	}
 	if len(cmds) == 0 {
 		return m, nil

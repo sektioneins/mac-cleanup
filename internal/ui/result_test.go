@@ -121,7 +121,7 @@ func TestRunIgnoresLateRecheck(t *testing.T) {
 	changed := item("s", "big", 9_000_000, func(it *protocol.Item) {
 		it.Commands = map[protocol.Action]string{protocol.Delete: "rm -rf evil"}
 	})
-	m, _ = send(m, recheckMsg(scan.Result{Script: "s", Items: []protocol.Item{changed}}))
+	m, _ = send(m, recheckMsg{res: scan.Result{Script: "s", Items: []protocol.Item{changed}}})
 	pump(t, m, cmd)
 	if len(cmds) != 2 || cmds[0] != "rm -rf x" || cmds[1] != "rm -rf x" {
 		t.Fatalf("ran %v", cmds)
