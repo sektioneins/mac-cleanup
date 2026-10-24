@@ -2,9 +2,11 @@
 package action
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -22,8 +24,9 @@ type Outcome struct {
 	Err     error
 }
 
-// Run executes it.Commands[a] with /bin/bash -c, unchanged.
-func Run(ctx context.Context, it protocol.Item, a protocol.Action) Outcome {
+// Run executes it.Commands[a] with /bin/bash -c, unchanged. The combined
+// output is copied to out (if not nil) as it arrives.
+func Run(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) Outcome {
 	o := Outcome{Key: it.Key(), Action: a}
 	cmd, ok := it.Commands[a]
 	if !ok || cmd == "" {
@@ -43,8 +46,16 @@ func Run(ctx context.Context, it protocol.Item, a protocol.Action) Outcome {
 		return err
 	}
 	c.WaitDelay = time.Second
-	out, err := c.CombinedOutput()
-	o.Output, o.Err = string(out), err
+	// One writer for both streams, so exec writes to it from one goroutine
+	// at a time.
+	var buf bytes.Buffer
+	var w io.Writer = &buf
+	if out != nil {
+		w = io.MultiWriter(&buf, out)
+	}
+	c.Stdout, c.Stderr = w, w
+	err := c.Run()
+	o.Output = buf.String()
 	success := c.ProcessState != nil && c.ProcessState.Success()
 	o.Err = classify(err, success, ctx.Err() != nil, func() bool { return c.Process != nil && groupStillThere(c.Process.Pid) })
 	return o

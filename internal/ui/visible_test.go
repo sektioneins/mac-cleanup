@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -120,7 +121,7 @@ func TestViewShowsControlCharactersEscaped(t *testing.T) {
 func TestRunAndResultShowControlCharactersEscaped(t *testing.T) {
 	d, _ := fakeDeps()
 	var ran []string
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		ran = append(ran, it.Commands[a])
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Err: errors.New("exit status 1")}
 	}

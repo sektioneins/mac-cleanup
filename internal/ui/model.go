@@ -3,8 +3,12 @@ package ui
 
 import (
 	"context"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -18,31 +22,60 @@ const MinSize = 1_000_000
 
 // Deps are the side effects the UI uses, replaceable in tests.
 type Deps struct {
-	Scan    func(script string) scan.Result
-	Run     func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome
+	Scan func(script string) scan.Result
+	// Run runs the item's command and copies its output to out as it comes.
+	Run     func(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome
 	Reveal  func(path string) error
 	Free    func() (free, total uint64, err error)
 	SudoCmd func() *exec.Cmd
 	// SudoRefresh renews the sudo ticket without prompting; it errors if the
 	// ticket has expired.
 	SudoRefresh func() error
+	// OpenLog creates the log file of one run and returns it with its path.
+	OpenLog func() (io.WriteCloser, string, error)
 }
 
 // DefaultDeps wires the real scanner, runner and free-space probe for freePath.
 func DefaultDeps(freePath string) Deps {
 	return Deps{
 		Scan: func(s string) scan.Result { return scan.Run(context.Background(), s) },
-		Run: func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
-			return action.Run(ctx, it, a)
+		Run: func(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome {
+			return action.Run(ctx, it, a, out)
 		},
 		Reveal:      action.Reveal,
 		Free:        func() (uint64, uint64, error) { return action.FreeSpace(freePath) },
 		SudoCmd:     action.SudoCmd,
 		SudoRefresh: action.SudoRefresh,
+		OpenLog:     openLog,
 	}
 }
 
+// openLog creates ~/Library/Logs/mac-cleanup/<date-time>.log.
+func openLog() (io.WriteCloser, string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, "", err
+	}
+	dir := filepath.Join(home, "Library", "Logs", "mac-cleanup")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", err
+	}
+	path := filepath.Join(dir, time.Now().Format("2006-01-02-150405")+".log")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, path, nil
+}
+
 type scanMsg scan.Result
+
+// genScanMsg is a scan result from Init; results of an earlier scan round
+// (before a rescan) are dropped.
+type genScanMsg struct {
+	gen int
+	res scan.Result
+}
 
 type freeMsg struct {
 	free, total uint64
@@ -63,6 +96,7 @@ const (
 type Model struct {
 	deps    Deps
 	scripts []string
+	gen     int           // scan round, raised by each rescan
 	results []scan.Result // in arrival order
 	free    freeMsg
 	hasFree bool
@@ -99,7 +133,8 @@ func (m Model) Init() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(m.scripts)+1)
 	for _, s := range m.scripts {
 		s := s
-		cmds = append(cmds, func() tea.Msg { return scanMsg(m.deps.Scan(s)) })
+		gen := m.gen
+		cmds = append(cmds, func() tea.Msg { return genScanMsg{gen, m.deps.Scan(s)} })
 	}
 	cmds = append(cmds, func() tea.Msg {
 		f, t, err := m.deps.Free()
@@ -112,6 +147,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case genScanMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		return m.Update(scanMsg(msg.res))
 	case scanMsg:
 		m.pinCursors()
 		m.results = append(m.results, scan.Result(msg))
@@ -129,6 +169,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.afterRefresh(msg)
 	case outcomeMsg:
 		return m.afterOutcome(msg)
+	case outputMsg:
+		return m.afterOutput(msg)
 	case tea.KeyMsg:
 		if m.screen == screenRun {
 			return m.updateRun(msg)

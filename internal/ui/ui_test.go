@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
@@ -21,13 +22,14 @@ func fakeDeps() (*Deps, *calls) {
 	c := &calls{}
 	d := &Deps{
 		Scan: func(script string) scan.Result { return scan.Result{Script: script} },
-		Run: func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+		Run: func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 			return action.Outcome{Key: it.Key(), Action: a}
 		},
 		Reveal:      func(p string) error { c.reveals = append(c.reveals, p); return nil },
 		Free:        func() (uint64, uint64, error) { return 41_200_000_000, 994_000_000_000, nil },
 		SudoCmd:     func() *exec.Cmd { return exec.Command("true") },
 		SudoRefresh: func() error { return nil },
+		OpenLog:     func() (io.WriteCloser, string, error) { return &memLog{}, "/logs/run.log", nil },
 	}
 	return d, c
 }

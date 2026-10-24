@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ import (
 	"mac-cleanup/internal/scan"
 )
 
-// pump runs cmd; outcomeMsg and startRunMsg results are fed back in until no
+// pump runs cmd; outcomeMsg, outputMsg and startRunMsg results are fed back in until no
 // command is left. Other messages (sudo) are returned unhandled.
 func pump(t *testing.T, m Model, cmd tea.Cmd) (Model, tea.Msg) {
 	t.Helper()
@@ -24,7 +25,7 @@ func pump(t *testing.T, m Model, cmd tea.Cmd) (Model, tea.Msg) {
 		}
 		msg := cmd()
 		switch msg.(type) {
-		case startRunMsg, outcomeMsg, refreshMsg:
+		case startRunMsg, outcomeMsg, outputMsg, refreshMsg:
 			m, cmd = send(m, msg)
 		default:
 			return m, msg
@@ -54,7 +55,7 @@ func twoItems() scan.Result {
 func TestRunsInOrder(t *testing.T) {
 	d, _ := fakeDeps()
 	var keys []string
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		keys = append(keys, it.Key())
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 	}
@@ -71,7 +72,7 @@ func TestRunsInOrder(t *testing.T) {
 func TestRunOneAtATimeAndProgress(t *testing.T) {
 	d, _ := fakeDeps()
 	n := 0
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		n++
 		return action.Outcome{Key: it.Key()}
 	}
@@ -93,7 +94,7 @@ func TestRunOneAtATimeAndProgress(t *testing.T) {
 func TestRunUsesChosenAction(t *testing.T) {
 	d, _ := fakeDeps()
 	var got []protocol.Action
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		got = append(got, a)
 		return action.Outcome{Key: it.Key(), Action: a}
 	}
@@ -111,7 +112,7 @@ func TestRunUsesChosenAction(t *testing.T) {
 func TestRunIgnoresLateRecheck(t *testing.T) {
 	d, _ := fakeDeps()
 	var cmds []string
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		cmds = append(cmds, it.Commands[a])
 		return action.Outcome{Key: it.Key(), Action: a}
 	}
@@ -134,7 +135,7 @@ func adminItem(id string) protocol.Item {
 func TestSudoRequestedForAdmin(t *testing.T) {
 	d, _ := fakeDeps()
 	ran := 0
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		ran++
 		return action.Outcome{Key: it.Key()}
 	}
@@ -214,7 +215,7 @@ func TestFreeBeforeMeasuredAtStart(t *testing.T) {
 	d, _ := fakeDeps()
 	cur := uint64(10_000_000_000)
 	d.Free = func() (uint64, uint64, error) { return cur, 1, nil }
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		cur = 30_000_000_000
 		return action.Outcome{Key: it.Key()}
 	}
@@ -232,7 +233,7 @@ func TestResultTrashNote(t *testing.T) {
 			it.Commands = map[protocol.Action]string{protocol.Trash: "mv x"}
 		})
 	}
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		o := action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 		if it.ID == "bad" {
 			o.Err = errors.New("exit status 1")
@@ -253,7 +254,7 @@ func TestResultTrashNote(t *testing.T) {
 
 func TestResultFailureListed(t *testing.T) {
 	d, _ := fakeDeps()
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Output: "rm: permission denied\n", Err: errors.New("exit status 1")}
 	}
 	m := finish(t, *d, scan.Result{Script: "s", Items: []protocol.Item{item("s", "big", 9_000_000)}})

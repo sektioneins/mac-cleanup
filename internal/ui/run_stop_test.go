@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -22,7 +23,7 @@ var ctrlC = tea.KeyMsg{Type: tea.KeyCtrlC}
 
 func counting(d *Deps) *[]string {
 	var ran []string
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		ran = append(ran, it.Key())
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}
 	}
@@ -79,7 +80,7 @@ func TestQAndEscAlsoStopAfterCurrent(t *testing.T) {
 
 func TestSecondCtrlCInterruptsCurrentItem(t *testing.T) {
 	d, _ := fakeDeps()
-	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		<-ctx.Done()
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Err: errors.New("interrupted")}
 	}
@@ -303,7 +304,7 @@ func TestSudoDoneDistinguishesRestoreErrors(t *testing.T) {
 
 func TestOutputSanitised(t *testing.T) {
 	d, _ := fakeDeps()
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a],
 			Output: "\x1b[31mred\x1b[0m\rprogress 50%\r\nline2\x07\x00\ttab\n", Err: errors.New("exit status 1")}
 	}
@@ -322,7 +323,7 @@ func TestOutputSanitised(t *testing.T) {
 
 func TestTrashSumUsesSnapshotAction(t *testing.T) {
 	d, _ := fakeDeps()
-	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		return action.Outcome{Key: it.Key(), Action: protocol.Delete} // misreports its action
 	}
 	it := both("rm -rf d", "mv t", func(it *protocol.Item) { it.Default = protocol.Trash })
@@ -336,7 +337,7 @@ func TestAdminInFlightCannotBeInterrupted(t *testing.T) {
 	d, _ := fakeDeps()
 	ctxCh := make(chan context.Context, 1)
 	release := make(chan struct{})
-	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action) action.Outcome {
+	d.Run = func(ctx context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 		ctxCh <- ctx
 		<-release
 		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a]}

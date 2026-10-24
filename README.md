@@ -48,7 +48,7 @@ Some safety rules hold throughout:
 - Trash uses `/usr/bin/trash`. With admin rights it moves the item into `~/.Trash` and refuses to overwrite anything already there.
 - `brew cleanup` runs with `HOMEBREW_NO_AUTOREMOVE=1`, so it never removes formulae you didn't ask about.
 - Scans only read. They never change anything, and the Android scan works from disk without network access.
-- No config, cache or state is kept between runs.
+- No config, cache or state is kept between runs. Each run writes a log (every command, its output and the result) to `~/Library/Logs/mac-cleanup/`, which the app never reads back.
 
 ## Requirements
 
@@ -84,9 +84,9 @@ This scans everything and prints one tab-separated line per item: category, name
 | Review | `↑`/`↓` move, `←`/`→` or `d`/`t` switch between delete and trash, `s` skip an item, `r` re-check warnings, `tab` or `enter` go to the buttons, `esc` back |
 | Review buttons | `←`/`→` choose run or back, `enter` press, `tab` back to the items |
 | Running | `ctrl+c`, `q` or `esc` stop after the current item; a second `ctrl+c` interrupts it, unless it runs as admin |
-| Done | `↑`/`↓`, `pgup`/`pgdn` scroll, `q` quit |
+| Done | `↑`/`↓`, `pgup`/`pgdn` scroll through the output and summary, `r` back to the list and scan again, `q` quit |
 
-Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs.
+Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
 
 When it's done, mac-cleanup shows how much free space you gained. It also lists anything that failed, with its output, and anything that didn't run. Space taken by trashed items is only freed once you empty the Trash.
 

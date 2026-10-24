@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestRunExactCommand(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	cmd := "printf '%s' 'a b' > '" + out + "'"
 	it := item(cmd)
-	o := Run(context.Background(), it, protocol.Delete)
+	o := Run(context.Background(), it, protocol.Delete, nil)
 	if o.Err != nil {
 		t.Fatalf("err: %v (%s)", o.Err, o.Output)
 	}
@@ -38,7 +39,7 @@ func TestRunExactCommand(t *testing.T) {
 }
 
 func TestRunFailure(t *testing.T) {
-	o := Run(context.Background(), item("echo boom; exit 3"), protocol.Delete)
+	o := Run(context.Background(), item("echo boom; exit 3"), protocol.Delete, nil)
 	if o.Err == nil {
 		t.Fatal("want error")
 	}
@@ -48,7 +49,7 @@ func TestRunFailure(t *testing.T) {
 }
 
 func TestRunMissingAction(t *testing.T) {
-	o := Run(context.Background(), item("true"), protocol.Trash)
+	o := Run(context.Background(), item("true"), protocol.Trash, nil)
 	if o.Err == nil {
 		t.Fatal("want error")
 	}
@@ -73,7 +74,7 @@ func TestRunCancelKillsProcessGroup(t *testing.T) {
 	done := make(chan Outcome, 1)
 	// The subshell is a second process in the group; killing only bash would
 	// leave it running and it would touch the marker.
-	go func() { done <- Run(ctx, item("(sleep 1; touch '"+marker+"'); :"), protocol.Delete) }()
+	go func() { done <- Run(ctx, item("(sleep 1; touch '"+marker+"'); :"), protocol.Delete, nil) }()
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 	select {
@@ -93,7 +94,7 @@ func TestRunCancelKillsProcessGroup(t *testing.T) {
 func TestRunFinishedCommandNotInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	it := item("true")
-	o := Run(ctx, it, protocol.Delete)
+	o := Run(ctx, it, protocol.Delete, nil)
 	cancel()
 	if o.Err != nil {
 		t.Fatalf("Err = %v", o.Err)
@@ -101,7 +102,7 @@ func TestRunFinishedCommandNotInterrupted(t *testing.T) {
 }
 
 func TestRunBackgroundProcessHoldingOutput(t *testing.T) {
-	o := Run(context.Background(), item("sleep 3 & :"), protocol.Delete)
+	o := Run(context.Background(), item("sleep 3 & :"), protocol.Delete, nil)
 	if o.Err == nil || !strings.Contains(o.Err.Error(), "background process kept its output open") {
 		t.Fatalf("Err = %v", o.Err)
 	}
@@ -138,5 +139,44 @@ func TestClassify(t *testing.T) {
 	got := classify(errors.New("signal: killed"), false, true, func() bool { return true })
 	if got == nil || !strings.Contains(got.Error(), "may still be running") {
 		t.Errorf("survivor: got %v", got)
+	}
+}
+
+// chunkWriter records writes and signals the first one.
+type chunkWriter struct {
+	mu    sync.Mutex
+	buf   strings.Builder
+	first chan struct{}
+}
+
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.buf.Len() == 0 {
+		close(w.first)
+	}
+	w.buf.Write(p)
+	return len(p), nil
+}
+
+func TestRunStreamsOutput(t *testing.T) {
+	w := &chunkWriter{first: make(chan struct{})}
+	done := make(chan Outcome, 1)
+	go func() { done <- Run(context.Background(), item("echo one; echo two >&2; sleep 1; exit 2"), protocol.Delete, w) }()
+	select {
+	case <-w.first:
+	case <-done:
+		t.Fatal("output arrived only after the command finished")
+	case <-time.After(900 * time.Millisecond):
+		t.Fatal("no output while the command runs")
+	}
+	o := <-done
+	if o.Err == nil {
+		t.Fatal("want error")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.buf.String() != "one\ntwo\n" || o.Output != "one\ntwo\n" {
+		t.Fatalf("streamed %q, Output %q", w.buf.String(), o.Output)
 	}
 }
