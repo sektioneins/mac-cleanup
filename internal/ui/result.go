@@ -124,6 +124,7 @@ type runState struct {
 	log     io.WriteCloser // nil when it could not be opened
 	logPath string
 	logErr  error // first failure to open or write the log
+	logMid  bool  // the logged output of the in-flight item ends inside a line
 
 	scroll int
 }
@@ -217,7 +218,7 @@ func (m Model) skipAdmin() (tea.Model, tea.Cmd) {
 	for i, e := range r.entries {
 		if e.Item.Admin && r.outs[i] == nil {
 			r.outs[i] = &action.Outcome{Key: e.Item.Key(), Action: e.Action, Command: e.Command, Err: err}
-			r.logf("\n== %s (%s)\n$ %s\n-- skipped: %v\n", e.Item.Name, e.Action, e.Command, err)
+			r.logf("\n== %s (%s)\n$ %s\n-- skipped: %v\n", oneLine(e.Item.Name), e.Action, oneLine(e.Command), err)
 		}
 	}
 	return m.advance()
@@ -282,7 +283,8 @@ func (m Model) advance() (Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	r.segs = append(r.segs, seg{segItem, e.Item.Name + " (" + string(e.Action) + ")"}, seg{segCmd, e.Command})
-	r.logf("\n== %s (%s)\n$ %s\n", e.Item.Name, e.Action, e.Command)
+	r.logf("\n== %s (%s)\n$ %s\n", oneLine(e.Item.Name), e.Action, oneLine(e.Command))
+	r.logMid = false
 	r.started = time.Now()
 	s := newOutputStream()
 	r.stream = s
@@ -313,7 +315,40 @@ func (r *runState) addOutput(text string) {
 	} else {
 		r.segs = append(r.segs, seg{segOut, text})
 	}
+	text, r.logMid = logOutput(text, r.logMid)
 	r.logf("%s", text)
+}
+
+// oneLine is Visible with newlines escaped too, so a name or command cannot
+// add a line of its own to the log or the summary.
+func oneLine(s string) string { return strings.ReplaceAll(Visible(s), "\n", `\n`) }
+
+// logOutput escapes the ASCII control characters of command output other
+// than newline and tab, the way Visible does, so the log can be viewed in a
+// terminal, and starts every line with "| ", so output cannot pass for the
+// log's own lines. Other bytes stay as they are: output arrives in pieces that
+// can split a UTF-8 character. mid says whether the previous piece ended
+// inside a line; the second result says the same of s.
+func logOutput(s string, mid bool) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if !mid {
+			b.WriteString("| ")
+			mid = true
+		}
+		switch c := s[i]; {
+		case c == '\n':
+			b.WriteByte(c)
+			mid = false
+		case c == '\r':
+			b.WriteString(`\r`)
+		case (c < 0x20 && c != '\t') || c == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), mid
 }
 
 func (m Model) finish() (Model, tea.Cmd) {
@@ -522,7 +557,7 @@ func (m Model) resultLines() []string {
 	}
 	for _, i := range failed {
 		e, o := r.entries[i], r.outs[i]
-		out = append(out, "", "  "+clip(Visible(e.Item.Name), m.width-2))
+		out = append(out, "", "  "+clip(oneLine(e.Item.Name), m.width-2))
 		out = append(out, hardWrap(Visible(e.Command), m.width, "   $ ", "     ")...)
 		out = append(out, paintAll(danger, hardWrap("error: "+sanitize(o.Err.Error()), m.width, "   ", "     "))...)
 		if s := strings.TrimRight(sanitize(o.Output), "\n"); s != "" {
@@ -532,7 +567,7 @@ func (m Model) resultLines() []string {
 	var notRun []string
 	for i, o := range r.outs {
 		if o == nil {
-			notRun = append(notRun, "  "+clip(Visible(r.entries[i].Item.Name), m.width-2))
+			notRun = append(notRun, "  "+clip(oneLine(r.entries[i].Item.Name), m.width-2))
 		}
 	}
 	if len(notRun) > 0 {

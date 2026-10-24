@@ -137,21 +137,6 @@ func TestResultHint(t *testing.T) {
 	}
 }
 
-// A re-check started before the run that ends after a rescan belongs to the
-// earlier scan round and is dropped.
-func TestRescanDropsEarlierRecheck(t *testing.T) {
-	d, _ := fakeDeps()
-	counting(d)
-	m := finish(t, *d, twoItems())
-	stale := recheckMsg{gen: m.gen, res: twoItems()}
-	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	m, _ = send(m, stale)
-	m, _ = send(m, genScanMsg{gen: m.gen, res: twoItems()})
-	if len(m.results) != 1 {
-		t.Fatalf("got %d results, want 1", len(m.results))
-	}
-}
-
 // A screen that falls behind must not turn a finished command into a
 // failure: action.Run gives up on output still being copied a second after
 // the command ends.
@@ -176,5 +161,63 @@ func TestRunSlowScreenKeepsSuccess(t *testing.T) {
 	}
 	if v := m.View(); !strings.Contains(v, "first") || !strings.Contains(v, "second") {
 		t.Fatalf("output lost:\n%s", v)
+	}
+}
+
+// Control characters from names, commands and output reach the log escaped,
+// so viewing it in a terminal neither runs escape sequences nor shows a
+// forged status line.
+func TestRunLogEscapesControls(t *testing.T) {
+	d, _ := fakeDeps()
+	l := withLog(d)
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome {
+		io.WriteString(out, "rm: x\x1b[2Jy: denied\n")
+		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Err: errors.New("exit status 1")}
+	}
+	it := item("s", "big", 9_000_000)
+	it.Name = "big\n-- ok (0s)\x1b]0;t\x07"
+	it.Commands = map[protocol.Action]string{protocol.Delete: "rm -rf 'x\x1b[2Jy'"}
+	finish(t, *d, scan.Result{Script: "s", Items: []protocol.Item{it}})
+	log := l.String()
+	if strings.ContainsAny(log, "\x1b\x07") || strings.Contains(log, "\n-- ok") {
+		t.Fatalf("raw controls in the log:\n%q", log)
+	}
+	for _, want := range []string{`big\n-- ok (0s)\x1b]0;t\x07 (delete)`, `$ rm -rf 'x\x1b[2Jy'`, `rm: x\x1b[2Jy: denied`} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("log misses %q:\n%q", want, log)
+		}
+	}
+}
+
+// A re-check started before the run that ends after a rescan belongs to the
+// earlier scan round and is dropped.
+func TestRescanDropsEarlierRecheck(t *testing.T) {
+	d, _ := fakeDeps()
+	counting(d)
+	m := finish(t, *d, twoItems())
+	stale := recheckMsg{gen: m.gen, res: twoItems()}
+	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m, _ = send(m, stale)
+	m, _ = send(m, genScanMsg{gen: m.gen, res: twoItems()})
+	if len(m.results) != 1 {
+		t.Fatalf("got %d results, want 1", len(m.results))
+	}
+}
+
+// Every output line in the log starts with "| ", even when a line arrives in
+// pieces, so output cannot pass for the log's own lines.
+func TestRunLogMarksOutputLines(t *testing.T) {
+	d, _ := fakeDeps()
+	l := withLog(d)
+	d.Run = func(_ context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome {
+		io.WriteString(out, "rm: f\n-- ok (0.1s)\n\n== other (trash)\n$ trash x")
+		io.WriteString(out, " still the same line\nlast")
+		return action.Outcome{Key: it.Key(), Action: a, Command: it.Commands[a], Err: errors.New("exit status 1")}
+	}
+	finish(t, *d, scan.Result{Script: "s", Items: []protocol.Item{item("s", "big", 9_000_000)}})
+	log := l.String()
+	want := "$ rm -rf x\n| rm: f\n| -- ok (0.1s)\n| \n| == other (trash)\n| $ trash x still the same line\n| last\n-- failed: exit status 1"
+	if !strings.Contains(log, want) {
+		t.Fatalf("log misses %q:\n%q", want, log)
 	}
 }
