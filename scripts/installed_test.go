@@ -626,3 +626,166 @@ func TestInventoryVendorClaimNoApplications(t *testing.T) {
 		t.Errorf("vendorclaim = %q, want com.example", got)
 	}
 }
+
+// A registry app whose nested bundles can't be checked and whose id names no
+// vendor makes the inventory fail: nothing it could own is offered.
+func TestInventoryUncheckedWithoutVendor(t *testing.T) {
+	for _, tc := range []struct{ name, rel, id string }{
+		{"locked, one label", "Opt/Registered.app", "Registered"},
+		{"locked, no id", "Opt/Registered.app", ""},
+		{"protected, one label", "home/Downloads/Tool.app", "Tool"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			other := filepath.Join(e.Root, "Applications/Other.app")
+			e.app(other, "net.other.app", "Other")
+			var reg string
+			if strings.HasPrefix(tc.rel, "home/") {
+				reg = filepath.Join(e.Home, strings.TrimPrefix(tc.rel, "home/"))
+				e.app(reg, tc.id, "Tool")
+			} else {
+				reg = lockedRegistryApp(e, tc.rel, tc.id)
+			}
+			e.registry(
+				regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+				regRecord{Path: reg, ID: tc.id, Name: "Registered"},
+			)
+			ok, msg := e.inventoryErr(t.TempDir())
+			if ok || !strings.Contains(msg, "cannot check the bundles inside "+reg) {
+				t.Errorf("ok = %v, stderr = %q; want a failure naming %s", ok, msg, reg)
+			}
+		})
+	}
+}
+
+// Non-Apple registry apps under /System are scanned for nested bundles;
+// Apple's are not.
+func TestInventorySystemNonAppleScanned(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	sys := filepath.Join(e.Root, "System/Library/Vendor/Sys.app")
+	e.app(sys, "net.vendor.sys", "Sys")
+	e.app(filepath.Join(sys, "Contents/XPCServices/N.xpc"), "net.nested.sys", "N")
+	apple := filepath.Join(e.Root, "System/Library/CoreServices/A.app")
+	e.app(apple, "com.apple.a", "A")
+	e.app(filepath.Join(apple, "Contents/XPCServices/N.xpc"), "net.nested.apple", "N")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: sys, ID: "net.vendor.sys", Name: "Sys"},
+		regRecord{Path: apple, ID: "com.apple.a", Name: "A"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	ids := readLines(t, filepath.Join(dir, "ids"))
+	if !contains(ids, "net.nested.sys") || contains(ids, "net.nested.apple") {
+		t.Errorf("ids = %q, want net.nested.sys and not net.nested.apple", ids)
+	}
+}
+
+// The vendor of an app whose nested bundles could not be checked claims every
+// id of that vendor, and its second label claims plain folder names.
+func TestUnclaimedVendorClaim(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ids"), []byte("net.other.app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "vendorclaim"), []byte("com.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := e.command("-c", ". lib.sh; . installed.sh; mc_unclaimed "+dir)
+	cmd.Stdin = strings.NewReader("com.Example.helper\tp1\ncom.example\tp2\ncom.examples.x\tp3\nnet.gone.x\tp4\n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); got != "com.examples.x\tp3\nnet.gone.x\tp4\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestInventoryVendorClaimInVendors(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	reg := lockedRegistryApp(e, "Opt/Registered.app", "com.Example")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: reg, ID: "com.Example", Name: "Registered"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if got := readLines(t, filepath.Join(dir, "vendors")); !contains(got, "example") {
+		t.Errorf("vendors = %q, want example", got)
+	}
+}
+
+// A registry app that is not a folder, or a readable folder without
+// Contents, has no nested bundles to miss: no claim, no error. One that can't
+// be read at all is unchecked.
+func TestInventoryNothingNestedToCheck(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	file := filepath.Join(e.Root, "Opt/File.app")
+	e.write(file, 1)
+	bare := filepath.Join(e.Root, "Opt/Bare.app")
+	e.write(filepath.Join(bare, "readme"), 1)
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: file, ID: "File", Name: "File"},
+		regRecord{Path: bare, ID: "Bare", Name: "Bare"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if got := readLines(t, filepath.Join(dir, "vendorclaim")); len(got) != 0 {
+		t.Errorf("vendorclaim = %q, want empty", got)
+	}
+}
+
+func TestInventoryUnreadableRegistryAppNoVendor(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	locked := filepath.Join(e.Root, "Opt/Locked.app")
+	e.write(filepath.Join(locked, "readme"), 1)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: locked, ID: "Locked", Name: "Locked"},
+	)
+	if ok, msg := e.inventoryErr(t.TempDir()); ok || !strings.Contains(msg, "cannot check the bundles inside "+locked) {
+		t.Errorf("ok = %v, stderr = %q; want a failure naming %s", ok, msg, locked)
+	}
+}
+
+// A flat (iOS style) registry bundle keeps its nested bundles at the top.
+func TestInventoryFlatBundleScanned(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	flat := filepath.Join(e.Home, "Projects/build/Flat.app")
+	e.write(filepath.Join(flat, "Info.plist"), 1)
+	e.app(filepath.Join(flat, "PlugIns/Ext.appex"), "com.nested.flat", "Ext")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: flat, ID: "", Name: "Flat"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if ids := readLines(t, filepath.Join(dir, "ids")); !contains(ids, "com.nested.flat") {
+		t.Errorf("ids = %q, want com.nested.flat", ids)
+	}
+}

@@ -54,10 +54,6 @@ add() {
 	esac
 	first=${lid%%.*}
 	rest=${lid#*.}
-	# A vendor with an app whose nested bundles could not be checked.
-	if [ -s "$tmp/vendorclaim" ]; then
-		grep -qxF -- "$first.${rest%%.*}" "$tmp/vendorclaim" && return 0
-	fi
 	if [ -n "$team" ]; then
 		grep -qx -- "$team" "$tmp/teams" && return 0
 	elif [ "$group" = 1 ]; then

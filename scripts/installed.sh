@@ -153,14 +153,13 @@ _mc_registry_tagged() {
 		# Apple's own apps are not scanned for nested bundles (their ids are
 		# dropped anyway).
 		case $path in
-		"$MC_ROOT/System/"*) ;;
 		*.app)
 			if [ "$apple" != 1 ]; then
 				if [ -d "$path" ]; then
 					_mc_emit regpath "$path$_MC_US$id"
-				else
+				elif [ ! -e "$path" ]; then
 					# Unmounted volume: its nested bundles can't be checked.
-					_mc_vendorclaim "$id"
+					_mc_unchecked "$path" "$id"
 				fi
 			fi
 			;;
@@ -205,48 +204,57 @@ _mc_protected_dir() {
 	return 1
 }
 
-# _mc_vendorclaim ID: tagged `vendorclaim` line with the first two labels of
-# ID, lowercase. Nothing for an id with fewer than two labels.
-_mc_vendorclaim() {
+# _mc_unchecked APP ID: the nested bundles of APP were not checked. Its vendor
+# (the first two labels of ID, lowercase) claims everything of that vendor
+# (`vendorclaim`). An ID without a vendor is an `error`: nothing could tell
+# what APP owns.
+_mc_unchecked() {
 	local lid first rest
-	lid=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	lid=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+	first=${lid%%.*}
+	rest=${lid#*.}
+	rest=${rest%%.*}
 	case $lid in
 	*.*)
-		first=${lid%%.*}
-		rest=${lid#*.}
-		_mc_emit vendorclaim "$first.${rest%%.*}"
+		if [ -n "$first" ] && [ -n "$rest" ]; then
+			_mc_emit vendorclaim "$first.$rest"
+			return 0
+		fi
 		;;
 	esac
+	_mc_emit error "cannot check the bundles inside $1"
 }
 
 # _mc_nested_ids APPLIST STRICT: tagged lines for the bundle ids of the .xpc,
 # .appex and .app bundles nested in the installed apps listed in APPLIST (one
 # `path` per line, or `path<US>id` for the registry's apps). With STRICT=1 a
 # folder that can't be read is an error. The registry's apps (STRICT=0) can sit
-# in protected places like ~/Documents; they are not scanned there, and when
-# their Contents folder is missing or can't be read, or find reports an error,
-# they claim the vendor of their own id (`vendorclaim`) instead, because their
-# nested bundles may have been missed. LaunchServices does not register
+# in protected places like ~/Documents; they are not scanned there. Without a
+# Contents folder their top folder is scanned (flat bundles). When find
+# reports an error, they claim the vendor of their own id (`vendorclaim`, see
+# _mc_unchecked) instead, because their nested bundles may have been missed. LaunchServices does not register
 # nested bundles, but a sandboxed one has its own ~/Library/Containers folder.
 # Two plutil calls per bundle; a bundle without an Info.plist or without an id
 # is skipped, an unparsable Info.plist is an error.
 _mc_nested_ids() {
-	local app id b plist err v
+	local app id b plist err v root
 	if ! err=$(mktemp "${TMPDIR:-/tmp}/mc-nested.XXXXXX"); then
 		_mc_emit error "cannot create a temporary file"
 		return 1
 	fi
 	sort -u "$1" | while IFS=$_MC_US read -r app id; do
 		if [ "$2" != 1 ] && _mc_protected_dir "$app"; then
-			_mc_vendorclaim "$id"
+			_mc_unchecked "$app" "$id"
 			continue
 		fi
-		if [ ! -d "$app/Contents" ]; then
-			[ "$2" = 1 ] || _mc_vendorclaim "$id"
-			continue
+		root="$app/Contents"
+		if [ ! -d "$root" ]; then
+			[ "$2" = 1 ] && continue
+			# A flat (iOS style) bundle keeps its nested bundles at the top.
+			root=$app
 		fi
 		: >"$err"
-		find "$app/Contents" -maxdepth 7 -type d \( -name '*.xpc' -o -name '*.appex' -o -name '*.app' \) -print 2>"$err" |
+		find "$root" -mindepth 1 -maxdepth 7 -type d \( -name '*.xpc' -o -name '*.appex' -o -name '*.app' \) -print 2>"$err" |
 			while IFS= read -r b; do
 				plist="$b/Contents/Info.plist"
 				[ -f "$plist" ] || plist="$b/Info.plist"
@@ -261,7 +269,7 @@ _mc_nested_ids() {
 			if [ "$2" = 1 ]; then
 				_mc_emit error "cannot read $app"
 			else
-				_mc_vendorclaim "$id"
+				_mc_unchecked "$app" "$id"
 			fi
 		fi
 	done
@@ -273,11 +281,13 @@ _mc_split() {
 	awk -F"$_MC_US" -v d="$1" '{ print substr($0, length($1) + 2) >> (d "/" $1 ".raw") }'
 }
 
-# mc_inventory DIR: write the installed-app lists ids, teams, names, vendors,
-# apple, stale, groups (application-groups entitlements of installed apps) and
-# vendorclaim (vendor pairs of registry apps whose nested bundles could not be
-# checked; sorted, unique, possibly empty) to DIR. Fails when the Launch Services registry can't be
-# read.
+# mc_inventory DIR: write the installed-app lists ids, teams, names, vendors
+# (second labels of the ids and of vendorclaim), apple, stale, groups
+# (application-groups entitlements of installed apps) and vendorclaim (vendor
+# pairs of registry apps whose nested bundles could not be checked; sorted,
+# unique, possibly empty) to DIR. Fails when the Launch Services registry can't
+# be read, or an app's nested bundles can't be checked and its id names no
+# vendor.
 mc_inventory() {
 	local dir=$1 f
 	if ! "$MC_LSREGISTER" -dump >"$dir/dump.raw" 2>/dev/null; then
@@ -293,7 +303,7 @@ mc_inventory() {
 	} | _mc_split "$dir"
 	rm -f "$dir/find.err"
 	# Apple's own apps under System/Applications are not scanned.
-	grep -v -F -e "$MC_ROOT/System/Applications/" "$dir/apppath.raw" >"$dir/apppath.scan"
+	awk -v p="$MC_ROOT/System/Applications/" 'index($0, p) != 1' "$dir/apppath.raw" >"$dir/apppath.scan"
 	_mc_nested_ids "$dir/apppath.scan" 1 | _mc_split "$dir"
 	rm -f "$dir/apppath.scan"
 	# Apps already scanned strictly are not scanned again.
@@ -319,7 +329,10 @@ mc_inventory() {
 	for f in groups vendorclaim; do
 		tr '[:upper:]' '[:lower:]' <"$dir/$f.raw" | grep -v '^$' | sort -u >"$dir/$f"
 	done
-	awk -F. 'NF >= 3 { print $2 }' "$dir/ids" | sort -u >"$dir/vendors"
+	{
+		awk -F. 'NF >= 3 { print $2 }' "$dir/ids"
+		cut -d. -f2 "$dir/vendorclaim"
+	} | sort -u >"$dir/vendors"
 	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
 	return 0
 }
@@ -331,14 +344,15 @@ mc_is_bundle_id() {
 }
 
 # mc_unclaimed DIR: filter for `id<TAB>rest` lines; prints those whose id is
-# not claimed by DIR/ids.
+# not claimed by DIR/ids or, when it exists, DIR/vendorclaim.
 mc_unclaimed() {
 	if [ ! -r "$1/ids" ]; then
 		echo "mac-cleanup: no installed-app list in $1" >&2
 		return 1
 	fi
-	awk -F'\t' -v idsfile="$1/ids" '
+	awk -F'\t' -v idsfile="$1/ids" -v vcfile="$1/vendorclaim" '
 	BEGIN {
+		while ((getline l < vcfile) > 0) vc[l] = 1
 		while ((getline l < idsfile) > 0) {
 			if (l == "") continue
 			ids[l] = 1
@@ -350,7 +364,8 @@ mc_unclaimed() {
 	}
 	{
 		id = tolower($1)
-		claimed = (id in ids) || (id in pre)
+		split(id, lab, ".")
+		claimed = (id in ids) || (id in pre) || ((lab[1] "." lab[2]) in vc)
 		for (i = 1; !claimed && i <= length(id); i++)
 			if (substr(id, i, 1) == "." && (substr(id, 1, i - 1) in ids)) claimed = 1
 		if (!claimed) print
