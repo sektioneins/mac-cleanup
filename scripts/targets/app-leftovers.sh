@@ -17,63 +17,62 @@ team_re='^[A-Z0-9]{10}\.'
 # The first two labels (vendor) of every installed id, lowercase.
 awk -F. 'NF >= 2 { print $1 "." $2 }' "$tmp/ids" | sort -u >"$tmp/vendorpairs"
 
-# add ID PATH [TEAM]: print a candidate line unless it can't be a deleted
-# app's data.
+# add ID PATH [GROUP]: print a `name<TAB>id<TAB>path` candidate line unless it
+# can't be a deleted app's data. Team and group prefixes are removed from ID,
+# in every location, so Apple's own groups are dropped too; the name keeps
+# them, so an installed id with such a prefix still claims it. GROUP=1 (a Group Containers
+# folder) or a removed group prefix lets an installed app's vendor claim an id
+# without a team prefix.
 add() {
-	local id=$1 path=$2 team=${3:-} lid first rest
+	local name=$1 id=$1 path=$2 group=${3:-0} team="" lid first rest
 	# A tab or newline would corrupt the TAB separated lists.
 	case $path in
 	*$'\t'* | *$'\n'*) return 0 ;;
 	esac
 	mc_is_bundle_id "$id" || return 0
+	# An application-groups entitlement of an installed app claims the whole
+	# name.
+	grep -qixF -- "$id" "$tmp/groups" && return 0
+	while :; do
+		if [[ $id =~ $team_re ]]; then
+			team=${id%%.*}
+			id=${id#*.}
+		elif [[ $id == group.* ]]; then
+			id=${id#group.}
+			group=1
+		elif [[ $id == groups.* ]]; then
+			id=${id#groups.}
+			group=1
+		else
+			break
+		fi
+	done
+	mc_is_bundle_id "$id" || return 0
 	lid=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
 	case $lid in
 	com.apple.* | is.workflow.*) return 0 ;;
 	esac
+	first=${lid%%.*}
+	rest=${lid#*.}
 	# A vendor with an app whose nested bundles could not be checked.
 	if [ -s "$tmp/vendorclaim" ]; then
-		first=${lid%%.*}
-		rest=${lid#*.}
 		grep -qxF -- "$first.${rest%%.*}" "$tmp/vendorclaim" && return 0
 	fi
-	if [ -n "$team" ] && grep -qx -- "$team" "$tmp/teams"; then
-		return 0
+	if [ -n "$team" ]; then
+		grep -qx -- "$team" "$tmp/teams" && return 0
+	elif [ "$group" = 1 ]; then
+		grep -qxF -- "$first.${rest%%.*}" "$tmp/vendorpairs" && return 0
 	fi
-	printf '%s\t%s\n' "$id" "$path"
+	printf '%s\t%s\t%s\n' "$name" "$id" "$path"
 }
 
 candidates() {
-	local p name id team pair
+	local p name
 	for p in "$lib"/Containers/* "$lib"/WebKit/* "$lib"/Application\ Support/*; do
 		[ -d "$p" ] && [ ! -L "$p" ] && add "${p##*/}" "$p"
 	done
 	for p in "$lib/Group Containers"/*; do
-		[ -d "$p" ] && [ ! -L "$p" ] || continue
-		id=${p##*/}
-		mc_is_bundle_id "$id" || continue
-		# An application-groups entitlement of an installed app claims the
-		# whole folder name.
-		grep -qixF -- "$id" "$tmp/groups" && continue
-		team=""
-		while :; do
-			if [[ $id =~ $team_re ]]; then
-				team=${id%%.*}
-				id=${id#*.}
-			elif [[ $id == group.* ]]; then
-				id=${id#group.}
-			elif [[ $id == groups.* ]]; then
-				id=${id#groups.}
-			else
-				break
-			fi
-		done
-		# Without a team prefix, a group of an installed app's vendor is
-		# claimed.
-		if [ -z "$team" ]; then
-			pair=$(printf '%s' "$id" | awk -F. '{ print tolower($1 "." $2) }')
-			grep -qxF -- "$pair" "$tmp/vendorpairs" && continue
-		fi
-		add "$id" "$p" "$team"
+		[ -d "$p" ] && [ ! -L "$p" ] && add "${p##*/}" "$p" 1
 	done
 	for p in "$lib"/Preferences/*.plist; do
 		[ -f "$p" ] && [ ! -L "$p" ] || continue
@@ -105,7 +104,9 @@ candidates() {
 }
 
 candidates >"$tmp/cand"
-mc_unclaimed "$tmp" <"$tmp/cand" >"$tmp/unclaimed" || exit 1
+# Unclaimed by the name, then by the id.
+mc_unclaimed "$tmp" <"$tmp/cand" >"$tmp/byname" || exit 1
+cut -f 2- "$tmp/byname" | mc_unclaimed "$tmp" >"$tmp/unclaimed" || exit 1
 
 # One line per group: root id, the ids (space separated), then the paths, all
 # TAB separated. Shorter ids come first, so they become the roots.

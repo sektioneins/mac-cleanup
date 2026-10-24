@@ -625,3 +625,41 @@ func TestAppLeftoversUnmountedVolumeApp(t *testing.T) {
 		t.Fatalf("got %+v, want only net.unrelated.thing", items)
 	}
 }
+
+func TestAppLeftoversGroupNamesOutsideGroupContainers(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(path, "net.other.app", "Example")
+	e.registry(regRecord{Path: path, ID: "net.other.app", Name: "Example",
+		Groups: []string{"group.net.vendor.shared"}})
+	// Apple's own group, behind a group or team prefix.
+	leftoverFile(e, "Preferences/group.com.apple.example.plist", 4)
+	leftoverFile(e, "Preferences/ABCDE12345.com.apple.example.plist", 4)
+	leftoverFile(e, "Saved Application State/group.com.apple.other.savedState/data", 4)
+	// An installed app's group entitlement.
+	leftoverFile(e, "Preferences/group.net.vendor.shared.plist", 4)
+	leftoverFile(e, "HTTPStorages/group.net.vendor.shared/data", 4)
+	// Control.
+	leftoverFile(e, "Preferences/com.example.gone.plist", 4)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "com.example.gone" || len(items[0].Paths) != 1 {
+		t.Fatalf("got %+v, want only com.example.gone", items)
+	}
+}
+
+// An installed id that itself starts with a team prefix claims its data,
+// whatever team the record names.
+func TestAppLeftoversTeamPrefixedInstalledID(t *testing.T) {
+	for _, team := range []string{"", "FGHIJ67890"} {
+		e := newEnv(t)
+		path := filepath.Join(e.Root, "Applications/Helper.app")
+		e.app(path, "ABCDE12345.com.vendor.helper", "Helper")
+		e.registry(regRecord{Path: path, ID: "ABCDE12345.com.vendor.helper", Team: team, Name: "Helper"})
+		leftoverFile(e, "Containers/ABCDE12345.com.vendor.helper/data", 4)
+		leftoverFile(e, "Application Support/ABCDE12345.com.vendor.helper/data", 4)
+		leftoverFile(e, "Preferences/ABCDE12345.com.vendor.helper.plist", 4)
+		if items := e.run("app-leftovers"); len(items) != 0 {
+			t.Fatalf("team %q: got %+v, want none", team, items)
+		}
+	}
+}
