@@ -3,6 +3,7 @@ package scripts_test
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -518,4 +519,28 @@ cat "$(dirname "$0")/btm.out"`)
 func (e *env) btmFails() {
 	e.t.Helper()
 	e.tool("sfltool", "echo 'sfltool: not permitted' >&2; exit 1")
+}
+
+// plist writes an XML property list with a Label and, when args are given, a
+// ProgramArguments array (which /usr/bin/plutil can read).
+func (e *env) plist(path, label string, args ...string) {
+	e.t.Helper()
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>` + html.EscapeString(label) + `</string>
+`)
+	if len(args) > 0 {
+		b.WriteString("<key>ProgramArguments</key><array>\n")
+		for _, a := range args {
+			b.WriteString("<string>" + html.EscapeString(a) + "</string>\n")
+		}
+		b.WriteString("</array>\n")
+	}
+	b.WriteString("</dict></plist>\n")
+	e.mkparent(path)
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
 }
