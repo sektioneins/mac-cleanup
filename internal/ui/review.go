@@ -55,14 +55,16 @@ func (m *Model) startReview() {
 			m.ract[it.Key()] = it.Default
 		}
 	}
-	for _, g := range m.groups() {
-		for _, r := range g.rows {
-			if r.view == "" {
-				add(r.item)
-				continue
-			}
-			for _, it := range m.viewItems(r.view, r.category) {
-				add(it)
+	for _, t := range []tab{tabSpace, tabAutostart} {
+		for _, g := range m.groupsFor(t) {
+			for _, r := range g.rows {
+				if r.view == "" {
+					add(r.item)
+					continue
+				}
+				for _, it := range m.viewItems(r.view, r.category) {
+					add(it)
+				}
 			}
 		}
 	}
@@ -73,7 +75,7 @@ func (m *Model) startReview() {
 // resolve are left out.
 func (m Model) reviewItems() []protocol.Item {
 	byKey := map[string]protocol.Item{}
-	for _, it := range m.visibleItems() {
+	for _, it := range m.allItems() {
 		byKey[it.Key()] = it
 	}
 	var out []protocol.Item
@@ -273,7 +275,7 @@ func (m *Model) applyRecheck(r scan.Result) {
 		return
 	}
 	old := map[string]protocol.Item{}
-	for _, it := range m.visibleItems() {
+	for _, it := range m.allItems() {
 		old[it.Key()] = it
 	}
 	replaced := false
@@ -290,7 +292,7 @@ func (m *Model) applyRecheck(r scan.Result) {
 	m.results = results
 
 	byKey := map[string]bool{}
-	for _, it := range m.visibleItems() {
+	for _, it := range m.allItems() {
 		byKey[it.Key()] = true
 	}
 	inScan := map[string]bool{}

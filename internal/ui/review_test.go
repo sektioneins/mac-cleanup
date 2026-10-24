@@ -188,7 +188,7 @@ func TestEscKeepsSelection(t *testing.T) {
 	if m.screen != screenList {
 		t.Fatal("not on list")
 	}
-	if n, _ := m.selectedTotals(); n != 1 {
+	if n, _, _ := m.selectedTotals(); n != 1 {
 		t.Fatalf("selected %d, want 1", n)
 	}
 }
@@ -432,7 +432,7 @@ func TestHardWrapTabCountsEight(t *testing.T) {
 	}
 }
 
-var tab = tea.KeyMsg{Type: tea.KeyTab}
+var tabKey = tea.KeyMsg{Type: tea.KeyTab}
 
 func TestTabFocusesButtons(t *testing.T) {
 	prev := lipgloss.ColorProfile()
@@ -445,7 +445,7 @@ func TestTabFocusesButtons(t *testing.T) {
 	if v := m.View(); strings.Contains(v, revRun) || !strings.Contains(v, revRow) {
 		t.Fatalf("items should have focus:\n%s", v)
 	}
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	v := m.View()
 	if !strings.Contains(v, revRun) || strings.Contains(v, revRow) || !strings.Contains(v, "> both") {
 		t.Fatalf("run button should have focus, cursor row only marked:\n%s", v)
@@ -459,7 +459,7 @@ func TestTabFocusesButtons(t *testing.T) {
 	if m.reviewIndex(m.reviewItems()) != 0 {
 		t.Fatal("down moved the hidden item cursor")
 	}
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
 	if !strings.Contains(m.View(), "cmd_trash") {
 		t.Fatal("tab did not give the items the arrow keys back")
@@ -468,13 +468,13 @@ func TestTabFocusesButtons(t *testing.T) {
 
 func TestBackButton(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
 	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil || m.screen != screenList || m.running {
 		t.Fatalf("back did not return to the list: screen=%v", m.screen)
 	}
-	if n, _ := m.selectedTotals(); n != 1 {
+	if n, _, _ := m.selectedTotals(); n != 1 {
 		t.Fatalf("selected %d, want 1", n)
 	}
 	m = press(m, "enter")
@@ -485,7 +485,7 @@ func TestBackButton(t *testing.T) {
 
 func TestRunButton(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyLeft})
 	_, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -499,7 +499,7 @@ func TestRunButton(t *testing.T) {
 
 func TestRunButtonBlocked(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}})
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil || m.screen != screenReview {
 		t.Fatal("blocked run button did something")
@@ -512,9 +512,9 @@ func TestRunButtonBlocked(t *testing.T) {
 
 func TestEnterOnItemsJumpsToRun(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "s", Items: []protocol.Item{item("s", "a", 5_000_000)}})
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, _ = send(m, tea.KeyMsg{Type: tea.KeyRight})
-	m, _ = send(m, tab)
+	m, _ = send(m, tabKey)
 	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil || m.screen != screenReview {
 		t.Fatal("enter on the items must not run")

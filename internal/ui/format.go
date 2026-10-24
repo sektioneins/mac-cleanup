@@ -40,6 +40,17 @@ func gradeLabel(g protocol.Grade) string {
 	return string(g)
 }
 
+// stateLabel is the running state of an Autostart entry.
+func stateLabel(state string) string {
+	switch state {
+	case "running", "loaded":
+		return "● " + state
+	case "stopped":
+		return "○ stopped"
+	}
+	return state
+}
+
 // gradeStyle colours a grade from safe (green) to risky (red).
 func gradeStyle(g protocol.Grade) lipgloss.Style {
 	switch g {

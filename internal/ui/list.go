@@ -28,20 +28,23 @@ type group struct {
 	rows  []row
 }
 
-// groups builds categories from the visible items.
-func (m Model) groups() []group {
+// groups builds the categories of the showing tab.
+func (m Model) groups() []group { return m.groupsFor(m.tab) }
+
+// groupsFor builds categories from the listed items of tab t.
+func (m Model) groupsFor(t tab) []group {
 	byCat := map[string]*group{}
 	var order []string
-	for _, it := range m.visibleItems() {
+	for _, it := range m.itemsOf(t) {
 		g, ok := byCat[it.Category]
 		if !ok {
 			g = &group{name: it.Category}
 			byCat[it.Category] = g
 			order = append(order, it.Category)
 		}
-		g.total += it.Size
+		g.total += amount(it)
 		if it.View == "" {
-			g.rows = append(g.rows, row{item: it, size: it.Size})
+			g.rows = append(g.rows, row{item: it, size: amount(it)})
 			continue
 		}
 		i := indexOfView(g.rows, it.View)
@@ -76,18 +79,23 @@ func indexOfView(rows []row, view string) int {
 	return -1
 }
 
-// rowLess sorts rows by size, largest first, then by key.
+// rowLess sorts rows by size (memory on the Autostart tab), largest first,
+// then by key; Autostart rows go by name before the key.
 func rowLess(a, b row) bool {
 	if a.size != b.size {
 		return a.size > b.size
 	}
+	if a.item.Autostart() && b.item.Autostart() && a.item.Name != b.item.Name {
+		return a.item.Name < b.item.Name
+	}
 	return a.item.Key()+a.view < b.item.Key()+b.view
 }
 
-// viewItems lists the visible items of a named view in a category, largest first.
+// viewItems lists the listed Space items of a named view in a category,
+// largest first.
 func (m Model) viewItems(view, category string) []protocol.Item {
 	var out []protocol.Item
-	for _, it := range m.visibleItems() {
+	for _, it := range m.itemsOf(tabSpace) {
 		if it.View == view && (category == "" || it.Category == category) {
 			out = append(out, it)
 		}
@@ -167,6 +175,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(rows) > 0 && rows[cur].view == "" {
 			m.toggle(rows[cur].item)
 		}
+	case "tab":
+		m.switchTab(1 - m.tab)
+	case "1":
+		m.switchTab(tabSpace)
+	case "2":
+		m.switchTab(tabAutostart)
 	case "o":
 		if len(rows) > 0 && len(rows[cur].item.Paths) > 0 {
 			_ = m.deps.Reveal(rows[cur].item.Paths[0])
@@ -175,7 +189,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(rows) > 0 && rows[cur].view != "" {
 			m.screen, m.view, m.viewCat = screenView, rows[cur].view, rows[cur].category
 			m.vcursor, m.vcurID = 0, ""
-		} else if n, _ := m.selectedTotals(); n > 0 {
+		} else if n, _, _ := m.selectedTotals(); n > 0 {
 			m.startReview()
 		}
 	}
@@ -183,6 +197,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggle(it protocol.Item) {
+	if len(it.Actions()) == 0 {
+		return
+	}
 	if m.selected[it.Key()] {
 		delete(m.selected, it.Key())
 	} else {
@@ -286,9 +303,13 @@ func (m Model) listScreen() string {
 		}
 	}
 
+	right := m.freeText()
+	if m.tab == tabAutostart {
+		right = m.runningText()
+	}
 	head := []string{
-		m.twoCol(" "+heading.Render("mac-cleanup"), m.freeText()+" "),
-		" [Space]",
+		m.twoCol(" "+heading.Render("mac-cleanup"), right+" "),
+		m.tabBar(),
 	}
 	if done := len(m.results); done < len(m.scripts) {
 		head[1] += "   scanning " + itoa(done) + "/" + itoa(len(m.scripts)) + " " + progressBar(done, len(m.scripts), 20)
@@ -299,15 +320,22 @@ func (m Model) listScreen() string {
 	if len(rows) > 0 {
 		detail = m.detail(rows[cursor])
 	}
-	n, size := m.selectedTotals()
+	n, disk, memory := m.selectedTotals()
+	sel := "  selected: " + plural(n, "item")
+	if disk > 0 {
+		sel += ", " + HumanSize(disk) + " disk"
+	}
+	if memory > 0 {
+		sel += ", " + HumanSize(memory) + " memory"
+	}
 	var foot []string
 	for _, f := range m.scanFailures() {
 		foot = append(foot, danger.Render(Visible("scan failed: "+f.Script+": "+firstLine(f.Err.Error()))))
 	}
 	foot = append(foot, m.rule())
 	foot = append(foot, detail...)
-	foot = append(foot, m.rule(),
-		"  selected: "+plural(n, "item")+", "+HumanSize(size)+"   "+faint.Render("space select  o finder  enter review/open  q quit"))
+	foot = append(foot, m.rule(), sel,
+		"  "+faint.Render("space select  tab switch  o finder  enter review/open  q quit"))
 
 	return strings.Join(m.frame(head, body, foot, curLine), "\n")
 }
@@ -345,6 +373,9 @@ func (m Model) rowLine(r row, cur bool) string {
 		return mark + "    " + Visible(r.view) + "  (" + plural(r.count, "folder") + ")  " + HumanSize(r.size) + "  enter to open"
 	}
 	it := r.item
+	if it.Autostart() {
+		return m.autostartLine(it, cur)
+	}
 	grade, warn := gradeLabel(it.Grade), ""
 	if len(it.Warnings) > 0 {
 		warn = "  ⚠ " + Visible(it.Warnings[0])

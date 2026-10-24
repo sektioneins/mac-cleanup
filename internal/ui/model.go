@@ -103,9 +103,11 @@ type Model struct {
 
 	selected map[string]bool
 	screen   screen
-	cursor   int    // list screen: index into navigable rows (fallback)
-	curID    string // identity of the row under the cursor
-	vcurID   string // identity of the item under the view cursor
+	tab      tab       // list screen: the showing tab
+	parked   tabCursor // list screen: cursor of the other tab
+	cursor   int       // list screen: index into navigable rows (fallback)
+	curID    string    // identity of the row under the cursor
+	vcurID   string    // identity of the item under the view cursor
 	view     string
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
@@ -209,24 +211,21 @@ func (m Model) View() string {
 	return m.listScreen()
 }
 
-// visibleItems returns all listed items (at least MinSize).
-func (m Model) visibleItems() []protocol.Item {
-	var out []protocol.Item
-	for _, r := range m.results {
-		for _, it := range r.Items {
-			if it.Size >= MinSize {
-				out = append(out, it)
-			}
-		}
-	}
-	return out
-}
+// visibleItems returns the listed items of the showing tab.
+func (m Model) visibleItems() []protocol.Item { return m.itemsOf(m.tab) }
 
-func (m Model) selectedTotals() (n int, size int64) {
-	for _, it := range m.visibleItems() {
-		if m.selected[it.Key()] {
-			n++
-			size += it.Size
+// selectedTotals counts the selected items of both tabs: the disk size of the
+// Space ones and the memory of the Autostart ones.
+func (m Model) selectedTotals() (n int, disk, memory int64) {
+	for _, it := range m.allItems() {
+		if !m.selected[it.Key()] {
+			continue
+		}
+		n++
+		if it.Autostart() {
+			memory += it.Memory
+		} else {
+			disk += it.Size
 		}
 	}
 	return
