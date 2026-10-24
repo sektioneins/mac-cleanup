@@ -614,3 +614,14 @@ func TestLibraryUnusedOddNames(t *testing.T) {
 		t.Fatalf("got %+v, want only as/Real Folder", items)
 	}
 }
+
+func TestAppLeftoversUnmountedVolumeApp(t *testing.T) {
+	e := newEnv(t)
+	otherApp(e, regRecord{Path: "/Volumes/Ext/Example.app", ID: "com.example.app", Name: "Example", Unmounted: true})
+	leftoverFile(e, "Containers/com.example.renderer/data", 5120)
+	leftoverFile(e, "Containers/net.unrelated.thing/data", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "net.unrelated.thing" {
+		t.Fatalf("got %+v, want only net.unrelated.thing", items)
+	}
+}

@@ -593,3 +593,36 @@ func TestInventoryTempFileFails(t *testing.T) {
 		t.Errorf("err = %v, stderr = %q; want a failure with a message", err, stderr.String())
 	}
 }
+
+func TestInventoryStringGroup(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: "/Volumes/Ext/Example.app", ID: "com.example.app", Name: "Example", Unmounted: true, GroupString: "ABCDE12345.com.Example.One"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if !contains(readLines(t, filepath.Join(dir, "ids")), "com.example.app") {
+		t.Errorf("the unmounted record was not kept as installed")
+	}
+	if !contains(readLines(t, filepath.Join(dir, "groups")), "abcde12345.com.example.one") {
+		t.Errorf("groups lack the string value")
+	}
+}
+
+func TestInventoryVendorClaimNoApplications(t *testing.T) {
+	e := newEnv(t)
+	reg := lockedRegistryApp(e, "Opt/Registered.app", "com.example.locked")
+	e.registry(regRecord{Path: reg, ID: "com.example.locked", Name: "Registered"})
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if got := readLines(t, filepath.Join(dir, "vendorclaim")); len(got) != 1 || got[0] != "com.example" {
+		t.Errorf("vendorclaim = %q, want com.example", got)
+	}
+}

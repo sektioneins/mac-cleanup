@@ -48,6 +48,13 @@ _mc_registry_records() {
 	}
 	/^[ \t]+"?com\.apple\.security\.application-groups"?[ \t]*=/ {
 		s = $0
+		if (s !~ /\(/) {
+			# Single value: key = "X";
+			sub(/^[^=]*=/, "", s)
+			sub(/;[ \t\r]*$/, "", s)
+			addvals(s)
+			next
+		}
 		sub(/^[^(]*\(/, "", s)
 		if (s ~ /\);/) { sub(/\);.*/, "", s); addvals(s) }
 		else { addvals(s); ingrp = 1 }
@@ -147,7 +154,16 @@ _mc_registry_tagged() {
 		# dropped anyway).
 		case $path in
 		"$MC_ROOT/System/"*) ;;
-		*.app) [ "$apple" = 1 ] || { [ -d "$path" ] && _mc_emit regpath "$path$_MC_US$id"; } ;;
+		*.app)
+			if [ "$apple" != 1 ]; then
+				if [ -d "$path" ]; then
+					_mc_emit regpath "$path$_MC_US$id"
+				else
+					# Unmounted volume: its nested bundles can't be checked.
+					_mc_vendorclaim "$id"
+				fi
+			fi
+			;;
 		esac
 		_mc_emit ids "$id"
 		_mc_emit teams "$team"
@@ -281,7 +297,7 @@ mc_inventory() {
 	_mc_nested_ids "$dir/apppath.scan" 1 | _mc_split "$dir"
 	rm -f "$dir/apppath.scan"
 	# Apps already scanned strictly are not scanned again.
-	awk -F"$_MC_US" 'NR == FNR { a[$0] = 1; next } !($1 in a)' "$dir/apppath.raw" "$dir/regpath.raw" | sort -u >"$dir/regpath.new"
+	awk -F"$_MC_US" 'FILENAME == ARGV[1] { a[$0] = 1; next } !($1 in a)' "$dir/apppath.raw" "$dir/regpath.raw" | sort -u >"$dir/regpath.new"
 	_mc_nested_ids "$dir/regpath.new" 0 | _mc_split "$dir"
 	rm -f "$dir/regpath.new"
 	if [ -s "$dir/error.raw" ]; then

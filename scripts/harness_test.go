@@ -150,6 +150,9 @@ type regRecord struct {
 	Unmounted            bool
 	// Groups are the application-groups entitlement values.
 	Groups []string
+	// GroupString is a single-string application-groups entitlement, written
+	// before the mount state.
+	GroupString string
 }
 
 // registry writes a fake lsregister that prints a dump of the records.
@@ -172,6 +175,11 @@ func (e *env) registry(recs ...regRecord) {
 		field("teamID", team)
 		field("identifier", r.ID)
 		field("executable", "Contents/MacOS/"+r.Name)
+		if r.GroupString != "" {
+			field("entitlements", "1 values (...)")
+			ind := strings.Repeat(" ", 28)
+			b.WriteString(ind + "{\n" + ind + "    \"com.apple.security.application-groups\" = \"" + r.GroupString + "\";\n" + ind + "}\n")
+		}
 		if r.Unmounted {
 			field("mount state", "not mounted")
 		} else {
