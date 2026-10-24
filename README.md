@@ -1,6 +1,6 @@
 # mac-cleanup
 
-A terminal UI that finds reclaimable disk space on a Mac, explains each item and removes only what you select. Before anything runs, it shows the exact shell command, and that string is what runs: no hidden steps, nothing rewritten in between.
+A terminal UI that finds reclaimable disk space on a Mac and the things that start by themselves and use its memory. It explains each item and removes only what you select. Before anything runs, it shows the exact shell command, and that string is what runs: no hidden steps, nothing rewritten in between.
 
 ```
  mac-cleanup                                     free: 41.2 GB of 994 GB
@@ -17,7 +17,11 @@ A terminal UI that finds reclaimable disk space on a Mac, explains each item and
 
 ## What it looks for
 
-Each cleanup target is a small bash script in `scripts/targets/`:
+The main screen has two tabs, Space and Autostart. Each target is a small bash script in `scripts/targets/`.
+
+### Space
+
+The Space tab is about disk:
 
 | Category | Targets |
 |---|---|
@@ -29,6 +33,40 @@ Each cleanup target is a small bash script in `scripts/targets/`:
 | Unused apps | apps not opened for over a year, or never opened as far as macOS knows |
 
 Items under 1 MB are not listed. If something a target looks for isn't there, the target reports nothing.
+
+### Autostart
+
+The Autostart tab is about memory. It lists what starts by itself on this Mac and is not part of macOS: nothing from Apple is shown, and only your own account and the system-wide entries are looked at. The 1 MB minimum does not apply, so every entry is listed. Each category is sorted by memory, largest first, with entries that aren't running at the end.
+
+| Category | What is listed |
+|---|---|
+| Login items | apps that open at login, and the background items and agents that an app registers for itself |
+| Agents and daemons | launch agents from `~/Library/LaunchAgents` and `/Library/LaunchAgents`, launch daemons from `/Library/LaunchDaemons` |
+| Kernel extensions | third-party kernel extensions that are loaded now |
+| System extensions | third-party system extensions |
+
+Each row shows:
+
+- the memory in use, which counts the process and everything it started, so helper processes are included (a process is counted once, even if two entries would claim it)
+- whether it is running (loaded, for kernel extensions) or stopped
+- whether it is on or off, as far as launchd and the Background Task Management database say
+- the app it belongs to, or "owner unknown" when that can't be worked out
+
+The header shows the memory of everything that is running. An entry is marked as an orphan when its program no longer exists ("program missing") or when the app it belongs to has been deleted ("app deleted"). An entry whose owner is unknown is never called an orphan.
+
+Autostart items never have Delete. What you can do depends on the kind:
+
+| Kind | Stop | Disable | Trash |
+|---|---|---|---|
+| Launch agent or daemon | unloads the job until the next login or boot | unloads it and tells launchd not to start it again | unloads it, then moves its plist to the Trash |
+| Agent or login item registered by an app | unloads the job | unloads it and disables it | none |
+| App that opens at login | quits the app | removes it from the login items | none |
+| Kernel extension | unloads it until the next boot | none | none |
+| System extension | none | none | none |
+
+Disable is the default when an item has it, otherwise Stop, otherwise Trash. A launch agent or daemon whose program is missing defaults to Trash, because its plist points at nothing. A job that isn't loaded has no Stop, and one that is already off has no Disable. macOS lets only the app that installed a system extension remove it, so those rows say "no action" and can't be selected. Kernel extensions are listed only while they are loaded, and macOS on Apple Silicon may refuse to unload one.
+
+System Settings can keep showing an item as allowed after you disabled it here. A "running" entry is not a warning: stopping running things is the point of the tab. If one of the sources can't be read (the Background Task Management database, `launchctl`, `kmutil` or `systemextensionsctl`), that target fails and the error list on the main screen says so, rather than listing everything as unowned.
 
 ## How it decides
 
@@ -79,14 +117,14 @@ This scans everything and prints one tab-separated line per item: category, name
 
 | Screen | Keys |
 |---|---|
-| List | `↑`/`↓` move, `space` select, `o` show in Finder, `enter` open a sub-list or go to the review, `q` quit |
+| List | `↑`/`↓` move, `space` select, `tab` switch between Space and Autostart (or `1` for Space, `2` for Autostart), `o` show in Finder, `enter` open a sub-list or go to the review, `q` quit |
 | Sub-list | `↑`/`↓` move, `space` select, `o` show in Finder, `esc` back |
-| Review | `↑`/`↓` move, `←`/`→` or `d`/`t` switch between delete and trash, `s` skip an item, `r` re-check warnings, `tab` or `enter` go to the buttons, `esc` back |
+| Review | `↑`/`↓` move, `←`/`→` switch between the item's actions (delete and trash; disable, stop and trash on the Autostart tab), `d`/`t` pick delete or trash, `s` skip an item, `r` re-check warnings, `tab` or `enter` go to the buttons, `esc` back |
 | Review buttons | `←`/`→` choose run or back, `enter` press, `tab` back to the items |
 | Running | `ctrl+c`, `q` or `esc` stop after the current item; a second `ctrl+c` interrupts it, unless it runs as admin |
 | Done | `↑`/`↓`, `pgup`/`pgdn` scroll through the output and summary, `r` back to the list and scan again, `q` quit |
 
-Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
+Each tab keeps its own cursor and collapsed categories, and what you select on both goes into one review. Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
 
 When it's done, mac-cleanup shows how much free space you gained. It also lists anything that failed, with its output, and anything that didn't run. Space taken by trashed items is only freed once you empty the Trash.
 
@@ -113,6 +151,20 @@ end
 ```
 
 A `warn` line, for example when Gradle is still running, blocks the item until it is skipped or re-checked clean.
+
+An item for the Autostart tab sets `tab` to `autostart`. It then needs `id`, `name`, `category`, `explain`, `memory` and `state`, and it has no `size` or `grade`. The extra keys exist only with that tab, and a record that uses one without it is rejected:
+
+| Key | Value |
+|---|---|
+| `tab` | `autostart`; items without it belong to the Space tab |
+| `memory` | resident memory in bytes, kept apart from `size` so disk and memory are never added together |
+| `state` | `running`, `stopped` or `loaded` |
+| `enabled` | `on` or `off`; leave it out when the script can't tell |
+| `owner` | the app it belongs to; leave it out when unknown |
+| `orphan` | why it points at nothing, such as `program missing` or `app deleted` |
+| `cmd_stop`, `cmd_disable` | the commands for the Stop and Disable actions, next to `cmd_trash` |
+
+Autostart items never have `cmd_delete`. An item may have no command at all, as the system extensions do, and then it has no `default` either; otherwise `default` is `stop`, `disable` or `trash`, whichever of them has a command. The four autostart targets share `scripts/autostart.sh`, which reads the process table, `launchctl` and the Background Task Management database. Together with `scripts/installed.sh` it works out who owns an item. If a source can't be read, the target fails with a message on stderr and the UI lists the error.
 
 Look at an existing target, such as `scripts/targets/gradle-caches.sh`, and at its tests in `scripts/targets_*_test.go`. The tests run each script against a fake home directory with stub tools.
 
