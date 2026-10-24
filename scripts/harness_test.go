@@ -277,3 +277,246 @@ func (e *env) atime(path string) time.Time {
 	}
 	return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec)
 }
+
+// bashRC sources lib.sh, runs the snippet and returns stdout, stderr and the
+// exit status (a failure is not fatal).
+func (e *env) bashRC(snippet string) (string, string, int) {
+	e.t.Helper()
+	var stdout, stderr bytes.Buffer
+	cmd := e.command("-c", ". lib.sh; "+snippet)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err == nil {
+		return stdout.String(), stderr.String(), 0
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return stdout.String(), stderr.String(), ee.ExitCode()
+	}
+	e.t.Fatal(err)
+	return "", "", -1
+}
+
+// shq single-quotes s for bash.
+func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// psLine is one process of the fake `ps -axo pid=,ppid=,rss=,comm=`.
+type psLine struct {
+	PID, PPID, RSSKB int
+	Comm             string
+}
+
+// ps writes a fake ps that prints the processes in the layout of the real one
+// (right-aligned numbers, then the comm, which may contain spaces).
+func (e *env) ps(lines ...psLine) {
+	e.t.Helper()
+	var b strings.Builder
+	for _, l := range lines {
+		fmt.Fprintf(&b, "%5d %5d %6d %s\n", l.PID, l.PPID, l.RSSKB, l.Comm)
+	}
+	if err := os.WriteFile(filepath.Join(e.Bin, "ps.out"), []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("ps", `cat "$(dirname "$0")/ps.out"`)
+}
+
+// psFails makes the fake ps exit 1.
+func (e *env) psFails() {
+	e.t.Helper()
+	e.tool("ps", "echo 'ps: operation not permitted' >&2; exit 1")
+}
+
+// launchdJob is a loaded launchd job of the fake launchctl. Target is
+// gui/501/label or system/label; State defaults to running; the pid line is
+// printed only when PID > 0.
+type launchdJob struct {
+	Target, State string
+	PID           int
+}
+
+// text is the `launchctl print` output: tab-indented key = value lines with
+// nested blocks, which carry state and pid lines of their own.
+func (j launchdJob) text() string {
+	label := j.Target[strings.LastIndex(j.Target, "/")+1:]
+	state := j.State
+	if state == "" {
+		state = "running"
+	}
+	var b strings.Builder
+	b.WriteString(j.Target + " = {\n")
+	b.WriteString("\tactive count = 1\n")
+	b.WriteString("\tpath = /Users/example/Library/LaunchAgents/" + label + ".plist\n")
+	b.WriteString("\ttype = LaunchAgent\n")
+	b.WriteString("\tproperties = {\n\t\tstate = nested-before\n\t\tpid = 998\n\t}\n")
+	b.WriteString("\tstate = " + state + "\n")
+	b.WriteString("\tprogram = /Applications/Example App.app/Contents/MacOS/Example Agent\n")
+	b.WriteString("\tenvironment = {\n\t\tstate = nested-after\n\t\tpid = 999\n\t}\n")
+	if j.PID > 0 {
+		fmt.Fprintf(&b, "\tpid = %d\n", j.PID)
+	}
+	b.WriteString("\tlast exit code = (never exited)\n}\n")
+	return b.String()
+}
+
+const fakeLaunchctl = `
+dir=$(dirname "$0")
+case "$1" in
+print)
+	i=0
+	while IFS= read -r t; do
+		i=$((i + 1))
+		if [ "$t" = "$2" ]; then
+			cat "$dir/launchctl.job.$i"
+			exit 0
+		fi
+	done < "$dir/launchctl.targets"
+	case "$2" in
+	gui/*/*)
+		echo 'Bad request.'
+		uid=${2#gui/}
+		echo "Could not find service \"${2##*/}\" in domain for user gui: ${uid%%/*}"
+		exit 113
+		;;
+	system/*)
+		echo 'Bad request.'
+		echo "Could not find service \"${2##*/}\" in domain for system"
+		exit 113
+		;;
+	gui/*|system) exit 0 ;;
+	esac
+	exit 1
+	;;
+print-disabled)
+	f="$dir/launchctl.disabled.$(printf '%s' "$2" | tr '/' '_')"
+	printf '\tdisabled services = {\n'
+	[ -f "$f" ] && cat "$f"
+	printf '\t\t"com.example.enabled" => enabled\n\t}\n'
+	exit 0
+	;;
+esac
+echo "launchctl: unexpected subcommand $1" >&2
+exit 1
+`
+
+// launchd writes a fake launchctl that serves `print TARGET` for the jobs
+// (exit 113 for any other service), `print gui/<n>` and `print system`
+// (exit 0), and `print-disabled DOMAIN` (see disabled). Every other
+// subcommand exits 1.
+func (e *env) launchd(jobs ...launchdJob) {
+	e.t.Helper()
+	var targets strings.Builder
+	for i, j := range jobs {
+		targets.WriteString(j.Target + "\n")
+		name := filepath.Join(e.Bin, fmt.Sprintf("launchctl.job.%d", i+1))
+		if err := os.WriteFile(name, []byte(j.text()), 0o644); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(e.Bin, "launchctl.targets"), []byte(targets.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("launchctl", fakeLaunchctl)
+}
+
+// disabled makes `launchctl print-disabled DOMAIN` report the labels as
+// disabled. It also lists one enabled service, which parsers must skip.
+func (e *env) disabled(domain string, labels ...string) {
+	e.t.Helper()
+	if _, err := os.Stat(filepath.Join(e.Bin, "launchctl")); err != nil {
+		e.launchd()
+	}
+	var b strings.Builder
+	for _, l := range labels {
+		b.WriteString("\t\t\"" + l + "\" => disabled\n")
+	}
+	name := filepath.Join(e.Bin, "launchctl.disabled."+strings.ReplaceAll(domain, "/", "_"))
+	if err := os.WriteFile(name, []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// launchctlFails makes the fake launchctl exit 1 for every subcommand.
+func (e *env) launchctlFails() {
+	e.t.Helper()
+	e.tool("launchctl", "echo 'launchctl: failed' >&2; exit 1")
+}
+
+// btmRecord is one record of the fake `sfltool dumpbtm`. Empty fields are not
+// printed, except an empty DeveloperName, which the real tool prints as
+// (null). Flags and Disposition are the bracket contents, e.g. "legacy,
+// curated" and "enabled, allowed, notified". Embedded are the ids of an
+// `Embedded Item Identifiers:` list (developer records).
+type btmRecord struct {
+	UID                                                                 int
+	Type, Flags, Disposition, Name, Developer, Identifier, URL, ExePath string
+	BundleID, ParentID, TeamID                                          string
+	Embedded                                                            []string
+}
+
+func btmText(recs []btmRecord) string {
+	var uids []int
+	byUID := map[int][]btmRecord{}
+	for _, r := range recs {
+		if _, ok := byUID[r.UID]; !ok {
+			uids = append(uids, r.UID)
+		}
+		byUID[r.UID] = append(byUID[r.UID], r)
+	}
+	var b strings.Builder
+	for _, uid := range uids {
+		b.WriteString("========================\n")
+		fmt.Fprintf(&b, " Records for UID %d : 01234567-89AB-CDEF-0123-456789ABCDEF\n", uid)
+		b.WriteString("========================\n\n")
+		for i, r := range byUID[uid] {
+			fmt.Fprintf(&b, " #%d:\n", i+1)
+			field := func(k, v string) { fmt.Fprintf(&b, "%21s: %s\n", k, v) }
+			opt := func(k, v string) {
+				if v != "" {
+					field(k, v)
+				}
+			}
+			field("UUID", fmt.Sprintf("01234567-89AB-CDEF-0123-4567890000%02d", i+1))
+			opt("Name", r.Name)
+			dev := r.Developer
+			if dev == "" {
+				dev = "(null)"
+			}
+			field("Developer Name", dev)
+			opt("Team Identifier", r.TeamID)
+			field("Type", r.Type+" (0x2)")
+			field("Flags", "[ "+r.Flags+" ] (0x40)")
+			field("Disposition", "["+r.Disposition+"] (0xb)")
+			opt("Identifier", r.Identifier)
+			opt("URL", r.URL)
+			opt("Executable Path", r.ExePath)
+			field("Generation", "1")
+			opt("Bundle Identifier", r.BundleID)
+			opt("Parent Identifier", r.ParentID)
+			if len(r.Embedded) > 0 {
+				b.WriteString("  Embedded Item Identifiers:\n")
+				for k, id := range r.Embedded {
+					fmt.Fprintf(&b, "    #%d: %s\n", k+1, id)
+				}
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// btm writes a fake sfltool whose `dumpbtm` prints the records in the layout
+// of the real tool: a section per UID (in order of first appearance) with the
+// records numbered from #1.
+func (e *env) btm(recs ...btmRecord) {
+	e.t.Helper()
+	if err := os.WriteFile(filepath.Join(e.Bin, "btm.out"), []byte(btmText(recs)), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("sfltool", `[ "$1" = dumpbtm ] || exit 1
+cat "$(dirname "$0")/btm.out"`)
+}
+
+// btmFails makes the fake sfltool exit 1.
+func (e *env) btmFails() {
+	e.t.Helper()
+	e.tool("sfltool", "echo 'sfltool: not permitted' >&2; exit 1")
+}
