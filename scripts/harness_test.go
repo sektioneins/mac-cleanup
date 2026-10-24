@@ -296,9 +296,6 @@ func (e *env) bashRC(snippet string) (string, string, int) {
 	return "", "", -1
 }
 
-// shq single-quotes s for bash.
-func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
 // psLine is one process of the fake `ps -axo pid=,ppid=,rss=,comm=`.
 type psLine struct {
 	PID, PPID, RSSKB int
@@ -440,9 +437,9 @@ func (e *env) launchctlFails() {
 	e.tool("launchctl", "echo 'launchctl: failed' >&2; exit 1")
 }
 
-// btmRecord is one record of the fake `sfltool dumpbtm`. Empty fields are not
-// printed, except an empty DeveloperName, which the real tool prints as
-// (null). Flags and Disposition are the bracket contents, e.g. "legacy,
+// btmRecord is one record of the fake `sfltool dumpbtm`. Empty Name, Developer
+// and URL are printed as (null), like the real tool; the other empty fields
+// are not printed. Flags and Disposition are the bracket contents, e.g. "legacy,
 // curated" and "enabled, allowed, notified". Embedded are the ids of an
 // `Embedded Item Identifiers:` list (developer records).
 type btmRecord struct {
@@ -475,18 +472,20 @@ func btmText(recs []btmRecord) string {
 				}
 			}
 			field("UUID", fmt.Sprintf("01234567-89AB-CDEF-0123-4567890000%02d", i+1))
-			opt("Name", r.Name)
-			dev := r.Developer
-			if dev == "" {
-				dev = "(null)"
+			nul := func(v string) string {
+				if v == "" {
+					return "(null)"
+				}
+				return v
 			}
-			field("Developer Name", dev)
+			field("Name", nul(r.Name))
+			field("Developer Name", nul(r.Developer))
 			opt("Team Identifier", r.TeamID)
 			field("Type", r.Type+" (0x2)")
 			field("Flags", "[ "+r.Flags+" ] (0x40)")
 			field("Disposition", "["+r.Disposition+"] (0xb)")
 			opt("Identifier", r.Identifier)
-			opt("URL", r.URL)
+			field("URL", nul(r.URL))
 			opt("Executable Path", r.ExePath)
 			field("Generation", "1")
 			opt("Bundle Identifier", r.BundleID)

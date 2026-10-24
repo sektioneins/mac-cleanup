@@ -29,13 +29,15 @@ mc_ps_snapshot() {
 # Pids listed in the file CLAIMED are not counted again; every pid counted
 # here is appended to CLAIMED, so callers that share it count each pid once.
 # A claimed pid's descendants are still visited. A pid missing from the
-# snapshot counts as nothing. Loops in the parent links end the walk.
+# snapshot counts as nothing, and so does a root that is not a pid above 1.
+# Loops in the parent links end the walk.
 mc_tree_rss() {
 	local snap=$1 claimed=$2
 	shift 2
 	: >>"$claimed"
-	awk -v claimed="$claimed" -v roots="$*" '
+	MC_CLAIMED=$claimed awk -v roots="$*" '
 	BEGIN {
+		claimed = ENVIRON["MC_CLAIMED"]
 		while ((getline l < claimed) > 0) done[l + 0] = 1
 		close(claimed)
 	}
@@ -46,7 +48,11 @@ mc_tree_rss() {
 	}
 	END {
 		n = split(roots, start, " ")
-		for (i = 1; i <= n; i++) queue[++tail] = start[i] + 0
+		for (i = 1; i <= n; i++) {
+			# Only real pids are roots: not 0, not launchd (1), not text.
+			if (start[i] !~ /^[0-9]+$/ || start[i] + 0 <= 1) continue
+			queue[++tail] = start[i] + 0
+		}
 		sum = 0
 		while (head < tail) {
 			p = queue[++head]

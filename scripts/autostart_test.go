@@ -85,6 +85,23 @@ func TestTreeRSSMissingClaimedFile(t *testing.T) {
 	}
 }
 
+func TestTreeRSSBadRoots(t *testing.T) {
+	e := newEnv(t)
+	psTree(e)
+	out := e.bash(`. autostart.sh; mc_ps_snapshot "$HOME/s"; : >"$HOME/c"
+mc_tree_rss "$HOME/s" "$HOME/c" 0 1 abc '' -5 1.5
+mc_tree_rss "$HOME/s" "$HOME/c" 0 99 abc
+wc -l <"$HOME/c" | tr -d ' '`)
+	if out != "0\n78848\n1\n" {
+		t.Errorf("out = %q, want 0, 78848, 1", out)
+	}
+	// A claimed path with a backslash is used as is.
+	out = e.bash(`. autostart.sh; mc_ps_snapshot "$HOME/s"; mkdir "$HOME/a\\nb"; mc_tree_rss "$HOME/s" "$HOME/a\\nb/c" 99; cat "$HOME/a\\nb/c"`)
+	if out != "78848\n99\n" {
+		t.Errorf("backslash path: out = %q", out)
+	}
+}
+
 func TestPidsMatching(t *testing.T) {
 	e := newEnv(t)
 	e.ps(
