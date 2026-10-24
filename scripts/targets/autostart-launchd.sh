@@ -61,23 +61,6 @@ while IFS=$_MC_US read -r r_uid r_type _ r_disp _ _ _ r_url _ _ r_parent _; do
 	printf '%s%s%s%s%s%s%s\n' "$(mc_url_path "$r_url")" "$_MC_US" "$r_uid" "$_MC_US" "$r_disp" "$_MC_US" "$r_parent"
 done <"$tmp/btm" >"$tmp/legacy"
 
-# program_missing PROGRAM: status 0 when PROGRAM is an absolute path that does
-# not exist. A path that cannot be looked up (a closed folder, a volume that is
-# not mounted) is not reported as missing.
-program_missing() {
-	local p=$MC_ROOT$1 d
-	case $1 in
-	/Volumes/*) return 1 ;;
-	/*) ;;
-	*) return 1 ;;
-	esac
-	[ ! -e "$p" ] || return 1
-	d=${p%/*}
-	while [ -n "$d" ] && [ ! -d "$d" ]; do d=${d%/*}; done
-	[ -n "$d" ] || d=/
-	[ -x "$d" ]
-}
-
 # Ids already used, so that one label in two folders gets two ids.
 used=$'\n'
 i=0
@@ -151,7 +134,7 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 		fi
 	fi
 
-	if program_missing "$program"; then
+	if mc_program_missing "$program"; then
 		orphan="program missing"
 	elif [ "$p_type" = app ] && [ -n "$p_bundle" ]; then
 		# An app record whose bundle id and team no installed app claims.

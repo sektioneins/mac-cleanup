@@ -214,3 +214,27 @@ mc_as_quote() {
 mc_service_target() {
 	mc_quote "$1/$2"
 }
+
+# mc_program_missing PATH: status 0 when PATH is an absolute path that does
+# not exist. Paths are looked up under $MC_ROOT, except those in $HOME. A path
+# that cannot be looked up is not reported as missing: one on a volume that
+# may not be mounted, one behind a folder that cannot be searched and one
+# behind a symbolic link that points nowhere.
+mc_program_missing() {
+	local p d
+	case $1 in
+	/Volumes/*) return 1 ;;
+	"$HOME"/*) p=$1 ;;
+	/*) p=$MC_ROOT$1 ;;
+	*) return 1 ;;
+	esac
+	[ ! -e "$p" ] || return 1
+	d=${p%/*}
+	while [ -n "$d" ] && [ ! -d "$d" ]; do
+		# A link to something that is not there may be a drive that is gone.
+		[ ! -L "$d" ] || return 1
+		d=${d%/*}
+	done
+	[ -n "$d" ] || d=/
+	[ -x "$d" ]
+}

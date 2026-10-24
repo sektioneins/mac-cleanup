@@ -638,3 +638,627 @@ func TestLaunchdDaemonDomainFails(t *testing.T) {
 		t.Errorf("stdout %q, stderr %q", out, stderr)
 	}
 }
+
+const loginTarget = "autostart-login"
+
+const exampleBundle = "/Applications/Example App.app"
+
+// parentApp is the BTM record of an app whose own login item is off: the
+// parent record of the agents and login items it registered.
+func parentApp(bundleID, team string) btmRecord {
+	r := appParent(bundleID, team)
+	r.Disposition = "disabled, allowed, notified"
+	return r
+}
+
+// bundleAt creates an app bundle directory (with its main executable) for the
+// logical path under MC_ROOT.
+func bundleAt(e *env, logical string) string {
+	e.t.Helper()
+	dir := filepath.Join(e.Root, logical)
+	e.exe(filepath.Join(dir, "Contents/MacOS/main"), "")
+	return dir
+}
+
+// oldStyle is the BTM record of an app that opens at login.
+func oldStyle(bundleID, bundle string) btmRecord {
+	return btmRecord{
+		UID: os.Getuid(), Type: "app", Flags: "", Disposition: "enabled, allowed, notified", Name: "Example App",
+		Developer: "Example Corp", Identifier: "2." + bundleID, URL: "file://" + (&url.URL{Path: bundle}).EscapedPath() + "/", BundleID: bundleID,
+	}
+}
+
+// registered is the BTM record of an agent that the app registers itself.
+func registered(parent btmRecord, typ, id, rel, exe string) btmRecord {
+	return btmRecord{
+		UID: os.Getuid(), Type: typ, Flags: "sandboxed", Disposition: "enabled, allowed, notified", Name: "Example Helper",
+		Developer: "Example Corp", Identifier: id, URL: (&url.URL{Path: rel}).EscapedPath(), ExePath: exe, ParentID: parent.Identifier,
+	}
+}
+
+// agentInApp writes the plist and executable of an SMAppService agent in the
+// example bundle and returns the BTM records (agent, parent).
+func agentInApp(e *env, label string) (btmRecord, btmRecord) {
+	e.t.Helper()
+	bundle := bundleAt(e, exampleBundle)
+	rel := "Contents/Library/LaunchAgents/" + label + ".plist"
+	e.plist(filepath.Join(bundle, rel), label, "x")
+	e.exe(filepath.Join(bundle, "Contents/MacOS/example-agent"), "")
+	parent := parentApp("com.example.other", "")
+	return registered(parent, "agent", "8."+label, rel, "Contents/MacOS/example-agent"), parent
+}
+
+func TestAutostartLoginAbsent(t *testing.T) {
+	e := launchdEnv(t)
+	disabledApp := oldStyle("com.example.app", exampleBundle)
+	disabledApp.Disposition = "disabled, allowed, notified"
+	e.btm(disabledApp, btmRecord{UID: os.Getuid(), Type: "spotlight", Disposition: "enabled, allowed, notified", Name: "Example Importer", Identifier: "3.com.example.importer"})
+	// Nothing to look at: ps and launchctl are not called.
+	mark := filepath.Join(e.Home, "called")
+	for _, tool := range []string{"ps", "launchctl"} {
+		e.tool(tool, "echo "+tool+" >> "+mark+"; exit 1")
+	}
+	if items := e.run(loginTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+	if b, err := os.ReadFile(mark); err == nil {
+		t.Errorf("tools were called: %s", b)
+	}
+}
+
+func TestLoginAppRunning(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	e.btm(oldStyle("com.example.app", exampleBundle))
+	e.ps(
+		psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"},
+		psLine{PID: 42, PPID: 1, RSSKB: 1000, Comm: exampleBundle + "/Contents/MacOS/Example App"},
+		psLine{PID: 43, PPID: 1, RSSKB: 500, Comm: exampleBundle + "/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"},
+		// A different bundle whose name extends this one.
+		psLine{PID: 44, PPID: 1, RSSKB: 9999, Comm: "/Applications/Example App Helper.app/Contents/MacOS/Helper"},
+	)
+	it := onlyItem(t, e.run(loginTarget))
+	if it.ID != "login/com.example.app" || it.Name != "Example App" || it.Category != "Login items" || !it.Autostart() {
+		t.Errorf("unexpected identity %+v", it)
+	}
+	if it.State != "running" || it.Memory != 1500*1024 || it.Enabled != "on" || it.Admin || it.Default != protocol.Disable || it.Orphan != "" {
+		t.Errorf("unexpected state %+v", it)
+	}
+	if len(it.Paths) != 1 || it.Paths[0] != exampleBundle {
+		t.Errorf("paths %v", it.Paths)
+	}
+	if it.Owner != "Example Corp" {
+		t.Errorf("owner %q", it.Owner)
+	}
+	want := map[protocol.Action]string{
+		protocol.Stop:    `osascript -e 'tell application id "com.example.app" to quit'`,
+		protocol.Disable: `osascript -e 'tell application "System Events" to delete (every login item whose path is "/Applications/Example App.app")'`,
+	}
+	for a, c := range want {
+		if it.Commands[a] != c {
+			t.Errorf("%s command %q, want %q", a, it.Commands[a], c)
+		}
+	}
+	if len(it.Commands) != 2 {
+		t.Errorf("commands %v", it.Commands)
+	}
+}
+
+func TestLoginAppStopped(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	e.btm(oldStyle("com.example.app", exampleBundle))
+	it := onlyItem(t, e.run(loginTarget))
+	if it.State != "stopped" || it.Memory != 0 || it.Default != protocol.Disable {
+		t.Errorf("unexpected %+v", it)
+	}
+	if _, ok := it.Commands[protocol.Stop]; ok || it.Commands[protocol.Disable] == "" {
+		t.Errorf("commands %v", it.Commands)
+	}
+}
+
+func TestLoginAppQuoting(t *testing.T) {
+	cases := []struct{ bundle, want string }{
+		{`/Applications/Say "hi".app`, `osascript -e 'tell application "System Events" to delete (every login item whose path is "/Applications/Say \"hi\".app")'`},
+		{`/Applications/It's.app`, `osascript -e 'tell application "System Events" to delete (every login item whose path is "/Applications/It'\''s.app")'`},
+		{`/Applications/Back\slash.app`, `osascript -e 'tell application "System Events" to delete (every login item whose path is "/Applications/Back\\slash.app")'`},
+	}
+	for _, c := range cases {
+		t.Run(c.bundle, func(t *testing.T) {
+			e := launchdEnv(t)
+			bundleAt(e, c.bundle)
+			rec := oldStyle(`com.example.say"x`, c.bundle)
+			e.btm(rec)
+			e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 5, PPID: 1, RSSKB: 10, Comm: c.bundle + "/Contents/MacOS/main"})
+			it := onlyItem(t, e.run(loginTarget))
+			if it.Commands[protocol.Disable] != c.want {
+				t.Errorf("disable %q, want %q", it.Commands[protocol.Disable], c.want)
+			}
+			// The bundle id is quoted for AppleScript and then for bash.
+			if it.Commands[protocol.Stop] != `osascript -e 'tell application id "com.example.say\"x" to quit'` {
+				t.Errorf("stop %q", it.Commands[protocol.Stop])
+			}
+			if len(it.Paths) != 1 || it.Paths[0] != c.bundle {
+				t.Errorf("paths %v", it.Paths)
+			}
+		})
+	}
+}
+
+func TestLoginAppWithoutBundleID(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	rec := oldStyle("", exampleBundle)
+	rec.Identifier = "2.com.example.fromid"
+	e.btm(rec)
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 5, PPID: 1, RSSKB: 10, Comm: exampleBundle + "/Contents/MacOS/main"})
+	it := onlyItem(t, e.run(loginTarget))
+	if it.ID != "login/"+exampleBundle {
+		t.Errorf("id %q", it.ID)
+	}
+	if _, ok := it.Commands[protocol.Stop]; ok || it.State != "running" || it.Default != protocol.Disable {
+		t.Errorf("no bundle id, no Stop: %+v", it)
+	}
+}
+
+func TestLoginDisabledAppSkipped(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	rec := oldStyle("com.example.app", exampleBundle)
+	rec.Disposition = "disabled, allowed, notified"
+	e.btm(rec)
+	if items := e.run(loginTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestLoginAppDisallowed(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		t.Run(strconv.FormatBool(running), func(t *testing.T) {
+			e := launchdEnv(t)
+			bundleAt(e, exampleBundle)
+			rec := oldStyle("com.example.app", exampleBundle)
+			rec.Disposition = "enabled, disallowed, notified"
+			e.btm(rec)
+			if running {
+				e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 5, PPID: 1, RSSKB: 10, Comm: exampleBundle + "/Contents/MacOS/main"})
+			}
+			it := onlyItem(t, e.run(loginTarget))
+			want := protocol.Disable
+			if running {
+				want = protocol.Stop
+			}
+			if it.Enabled != "off" || it.Default != want {
+				t.Errorf("enabled %q default %q, want off %q", it.Enabled, it.Default, want)
+			}
+		})
+	}
+}
+
+func TestLoginAppBundleMissing(t *testing.T) {
+	e := launchdEnv(t)
+	e.btm(oldStyle("com.example.app", exampleBundle))
+	it := onlyItem(t, e.run(loginTarget))
+	if it.Orphan != "program missing" || it.Default != protocol.Disable {
+		t.Errorf("orphan %q default %q", it.Orphan, it.Default)
+	}
+}
+
+func TestLoginAppBundleBehindDeadLink(t *testing.T) {
+	e := launchdEnv(t)
+	e.link(filepath.Join(e.Root, "Applications/Drive"), filepath.Join(e.Root, "gone-drive"))
+	e.btm(oldStyle("com.example.app", "/Applications/Drive/Example App.app"))
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "" {
+		t.Errorf("a link to nowhere is not a missing program, orphan %q", got)
+	}
+}
+
+func TestLoginAppUnderVolumes(t *testing.T) {
+	e := launchdEnv(t)
+	e.btm(oldStyle("com.example.app", "/Volumes/Disk/Example App.app"))
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "" {
+		t.Errorf("an unmounted volume is not a missing program, orphan %q", got)
+	}
+}
+
+func TestLoginAppInHome(t *testing.T) {
+	e := launchdEnv(t)
+	bundle := filepath.Join(e.Home, "Applications/Home App.app")
+	e.exe(filepath.Join(bundle, "Contents/MacOS/main"), "")
+	e.btm(oldStyle("com.example.app", bundle))
+	it := onlyItem(t, e.run(loginTarget))
+	if it.Orphan != "" || len(it.Paths) != 1 || it.Paths[0] != bundle {
+		t.Errorf("unexpected %+v", it)
+	}
+	if !strings.Contains(it.Commands[protocol.Disable], `whose path is "`+bundle+`"`) {
+		t.Errorf("disable %q", it.Commands[protocol.Disable])
+	}
+}
+
+func TestLoginAgentLabelFromPlist(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.b")
+	// The plist is called a.plist, its label is another.
+	bundle := filepath.Join(e.Root, exampleBundle)
+	if err := os.Rename(filepath.Join(bundle, "Contents/Library/LaunchAgents/com.example.b.plist"), filepath.Join(bundle, "Contents/Library/LaunchAgents/a.plist")); err != nil {
+		t.Fatal(err)
+	}
+	agent.URL = "Contents/Library/LaunchAgents/a.plist"
+	e.btm(parent, agent)
+	it := onlyItem(t, e.run(loginTarget))
+	if it.ID != guiDomain()+"/com.example.b" {
+		t.Errorf("id %q", it.ID)
+	}
+	if it.Orphan != "" {
+		t.Errorf("orphan %q", it.Orphan)
+	}
+}
+
+func TestLoginAgentLabelFromFileName(t *testing.T) {
+	cases := []struct{ name, url, want string }{
+		{"unreadable plist", "Contents/Library/LaunchAgents/com.example.file.plist", "com.example.file"},
+		{"no url", "", "agent.id"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := launchdEnv(t)
+			bundleAt(e, exampleBundle)
+			parent := parentApp("com.example.other", "")
+			agent := registered(parent, "agent", "8.agent.id", c.url, "")
+			agent.URL = c.url
+			e.btm(parent, agent)
+			it := onlyItem(t, e.run(loginTarget))
+			if it.ID != guiDomain()+"/"+c.want {
+				t.Errorf("id %q, want %s", it.ID, c.want)
+			}
+			if it.Orphan != "" {
+				t.Errorf("without a readable program nothing is missing, orphan %q", it.Orphan)
+			}
+		})
+	}
+}
+
+func TestLoginAgent(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	e.btm(parent, agent)
+	e.ps(
+		psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"},
+		psLine{PID: 42, PPID: 1, RSSKB: 1000, Comm: exampleBundle + "/Contents/MacOS/example-agent"},
+		psLine{PID: 43, PPID: 42, RSSKB: 500, Comm: "/usr/libexec/child"},
+	)
+	e.launchd(launchdJob{Target: guiDomain() + "/com.example.agent", PID: 42})
+	it := onlyItem(t, e.run(loginTarget))
+	target := "'" + guiDomain() + "/com.example.agent'"
+	if it.ID != guiDomain()+"/com.example.agent" || it.Name != "com.example.agent" || it.Category != "Login items" || !it.Autostart() {
+		t.Errorf("unexpected identity %+v", it)
+	}
+	if it.State != "running" || it.Memory != 1500*1024 || it.Enabled != "on" || it.Admin || it.Default != protocol.Disable || it.Orphan != "" {
+		t.Errorf("unexpected state %+v", it)
+	}
+	if it.Owner != "Example App" {
+		t.Errorf("owner %q, want the parent's name", it.Owner)
+	}
+	if len(it.Paths) != 1 || it.Paths[0] != exampleBundle {
+		t.Errorf("paths %v", it.Paths)
+	}
+	want := map[protocol.Action]string{
+		protocol.Stop:    "launchctl bootout " + target,
+		protocol.Disable: "launchctl bootout " + target + " && launchctl disable " + target,
+	}
+	for a, c := range want {
+		if it.Commands[a] != c {
+			t.Errorf("%s command %q, want %q", a, it.Commands[a], c)
+		}
+	}
+	if len(it.Commands) != 2 {
+		t.Errorf("commands %v", it.Commands)
+	}
+	if !strings.HasPrefix(it.Explain, "Background agent of Example App, started at every login.") || !strings.HasSuffix(it.Explain, "System Settings may still show it as allowed.") {
+		t.Errorf("explain %q", it.Explain)
+	}
+}
+
+func TestLoginAgentNotLoaded(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	e.btm(parent, agent)
+	it := onlyItem(t, e.run(loginTarget))
+	target := "'" + guiDomain() + "/com.example.agent'"
+	if it.State != "stopped" || it.Default != protocol.Disable || it.Commands[protocol.Disable] != "launchctl disable "+target {
+		t.Errorf("unexpected %+v", it)
+	}
+	if _, ok := it.Commands[protocol.Stop]; ok || len(it.Commands) != 1 {
+		t.Errorf("commands %v", it.Commands)
+	}
+}
+
+func TestLoginAgentOff(t *testing.T) {
+	cases := map[string]func(e *env, agent *btmRecord){
+		"disallowed": func(e *env, agent *btmRecord) { agent.Disposition = "enabled, disallowed, notified" },
+		"disabled":   func(e *env, agent *btmRecord) { agent.Disposition = "disabled, allowed, notified" },
+		"launchctl":  func(e *env, agent *btmRecord) { e.disabled(guiDomain(), "com.example.agent") },
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := launchdEnv(t)
+			agent, parent := agentInApp(e, "com.example.agent")
+			setup(e, &agent)
+			e.btm(parent, agent)
+			it := onlyItem(t, e.run(loginTarget))
+			// Off and not loaded: nothing to run.
+			if it.Enabled != "off" || len(it.Commands) != 0 || it.Default != "" {
+				t.Errorf("unexpected %+v", it)
+			}
+		})
+	}
+}
+
+func TestLoginAgentOffButLoaded(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	agent.Disposition = "enabled, disallowed, notified"
+	e.btm(parent, agent)
+	e.launchd(launchdJob{Target: guiDomain() + "/com.example.agent", PID: 42})
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 42, PPID: 1, RSSKB: 10, Comm: "/usr/libexec/x"})
+	it := onlyItem(t, e.run(loginTarget))
+	if it.Enabled != "off" || it.Default != protocol.Disable || !strings.Contains(it.Commands[protocol.Disable], "bootout") {
+		t.Errorf("unexpected %+v", it)
+	}
+}
+
+func TestLoginItemHelper(t *testing.T) {
+	e := launchdEnv(t)
+	bundle := bundleAt(e, exampleBundle)
+	helper := "Contents/Library/LoginItems/Example Helper.app"
+	e.exe(filepath.Join(bundle, helper, "Contents/MacOS/main"), "")
+	parent := parentApp("com.example.other", "")
+	li := registered(parent, "login item", "4.com.example.helper", helper, "")
+	li.BundleID = "com.example.helper"
+	e.btm(parent, li)
+	e.launchd(launchdJob{Target: guiDomain() + "/com.example.helper", PID: 7})
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 7, PPID: 1, RSSKB: 20, Comm: exampleBundle + "/" + helper + "/Contents/MacOS/main"})
+	it := onlyItem(t, e.run(loginTarget))
+	if it.ID != guiDomain()+"/com.example.helper" || it.Name != "Example Helper" || it.State != "running" || it.Memory != 20*1024 {
+		t.Errorf("unexpected %+v", it)
+	}
+	if it.Orphan != "" || len(it.Paths) != 1 || it.Paths[0] != exampleBundle || it.Owner != "Example App" {
+		t.Errorf("unexpected %+v", it)
+	}
+	if !strings.Contains(it.Explain, "Background login item of Example App") {
+		t.Errorf("explain %q", it.Explain)
+	}
+	// The same item without the helper bundle on disk.
+	if err := os.RemoveAll(filepath.Join(bundle, helper)); err != nil {
+		t.Fatal(err)
+	}
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "program missing" {
+		t.Errorf("orphan %q", got)
+	}
+}
+
+func TestLoginAgentProgramMissing(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	if err := os.Remove(filepath.Join(e.Root, exampleBundle, "Contents/MacOS/example-agent")); err != nil {
+		t.Fatal(err)
+	}
+	e.btm(parent, agent)
+	it := onlyItem(t, e.run(loginTarget))
+	if it.Orphan != "program missing" || it.Default != protocol.Disable {
+		t.Errorf("orphan %q default %q", it.Orphan, it.Default)
+	}
+}
+
+func TestLoginAgentAppDeleted(t *testing.T) {
+	cases := []struct {
+		name   string
+		parent btmRecord
+		reg    []regRecord
+		orphan string
+	}{
+		{"gone", parentApp("com.example.gone", ""), nil, "app deleted"},
+		{"gone with unknown team", parentApp("com.example.gone", "ZZZZZ99999"), nil, "app deleted"},
+		{"installed", parentApp("com.example.other", ""), nil, ""},
+		{"vendor sibling installed", parentApp("com.example.other.helper", ""), nil, ""},
+		{"developer parent", developerParent("Example Corp"), nil, ""},
+		{"team installed", parentApp("com.example.gone", "ABCDE12345"), []regRecord{{Path: "/Applications/Example Two.app", ID: "net.example.two", Team: "ABCDE12345", Name: "Example Two", Unmounted: true}}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := launchdEnv(t)
+			if c.reg != nil {
+				otherApp(e, c.reg...)
+			}
+			agent, _ := agentInApp(e, "com.example.agent")
+			agent.ParentID = c.parent.Identifier
+			// The bundle is gone when the app is deleted.
+			if c.orphan == "app deleted" {
+				if err := os.RemoveAll(filepath.Join(e.Root, exampleBundle)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.btm(c.parent, agent)
+			it := onlyItem(t, e.run(loginTarget))
+			if it.Orphan != c.orphan {
+				t.Errorf("orphan %q, want %q", it.Orphan, c.orphan)
+			}
+			if it.Default != protocol.Disable {
+				t.Errorf("default %q", it.Default)
+			}
+		})
+	}
+}
+
+func TestLoginAgentOwnerUnknown(t *testing.T) {
+	cases := []struct {
+		name, owner, explain string
+		dev                  string
+	}{
+		{"developer name", "Example Corp", "Background agent of Example Corp,", "Example Corp"},
+		{"unknown", "", "Background agent of an unknown owner,", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := launchdEnv(t)
+			agent := registered(parentApp("com.example.gone", ""), "agent", "8.com.example.agent", "Contents/Library/LaunchAgents/com.example.agent.plist", "Contents/MacOS/x")
+			agent.Developer = c.dev
+			agent.ParentID = "2.com.example.missing"
+			e.btm(agent)
+			it := onlyItem(t, e.run(loginTarget))
+			// Without a parent record there is no bundle: no path, no orphan.
+			if it.Owner != c.owner || it.Orphan != "" || len(it.Paths) != 0 {
+				t.Errorf("unexpected %+v", it)
+			}
+			if it.ID != guiDomain()+"/com.example.agent" || !strings.HasPrefix(it.Explain, c.explain) {
+				t.Errorf("id %q explain %q", it.ID, it.Explain)
+			}
+		})
+	}
+}
+
+func TestLoginParentFromSameUID(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	other := parentApp("com.example.other", "")
+	other.UID = 0
+	other.Name = "Wrong Owner"
+	e.btm(other, parent, agent)
+	if got := onlyItem(t, e.run(loginTarget)).Owner; got != "Example App" {
+		t.Errorf("owner %q", got)
+	}
+}
+
+func TestLoginOtherUIDSkipped(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	agent, parent := agentInApp(e, "com.example.agent")
+	app := oldStyle("com.example.app", exampleBundle)
+	for _, r := range []*btmRecord{&agent, &parent, &app} {
+		r.UID = 502
+	}
+	e.btm(parent, agent, app)
+	if items := e.run(loginTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestLoginLegacyFlagSkipped(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	agent.Flags = "legacy, curated"
+	e.btm(parent, agent)
+	if items := e.run(loginTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestLoginAppleSkipped(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	bundleAt(e, "/System/Applications/Thing.app")
+	apple := oldStyle("COM.Apple.thing", exampleBundle)
+	system := oldStyle("com.example.sys", "/System/Applications/Thing.app")
+	byID := oldStyle("", exampleBundle)
+	byID.Identifier = "2.com.apple.byid"
+	parent := parentApp("com.example.other", "")
+	label := registered(parent, "agent", "8.com.example.agent", "Contents/Library/LaunchAgents/com.apple.label.plist", "Contents/MacOS/x")
+	li := registered(parent, "login item", "4.Com.Apple.helper", "Contents/Library/LoginItems/H.app", "")
+	appleParent := parentApp("com.apple.parent", "")
+	child := registered(appleParent, "login item", "4.com.example.child", "Contents/Library/LoginItems/C.app", "")
+	child.Identifier = "4.com.example.child"
+	// The control is the only item left.
+	ok := registered(parent, "login item", "4.com.example.ok", "Contents/Library/LoginItems/Ok.app", "")
+	e.btm(apple, system, byID, parent, label, li, appleParent, child, ok)
+	e.plist(filepath.Join(e.Root, exampleBundle, "Contents/Library/LaunchAgents/com.apple.label.plist"), "COM.APPLE.label", "x")
+	if it := onlyItem(t, e.run(loginTarget)); it.ID != guiDomain()+"/com.example.ok" {
+		t.Errorf("got %+v", it)
+	}
+}
+
+func TestLoginIDsUnique(t *testing.T) {
+	e := launchdEnv(t)
+	agent, parent := agentInApp(e, "com.example.agent")
+	again := agent
+	again.Identifier = "8.again"
+	again.URL = "Contents/Library/LaunchAgents/com.example.agent.plist"
+	twin := oldStyle("com.example.app", exampleBundle)
+	twin2 := oldStyle("com.example.app", "/Applications/Example App 2.app")
+	bundleAt(e, "/Applications/Example App 2.app")
+	e.btm(parent, agent, again, twin, twin2)
+	items := e.run(loginTarget)
+	if len(items) != 4 {
+		t.Fatalf("got %+v", items)
+	}
+	seen := map[string]bool{}
+	for _, it := range items {
+		if seen[it.ID] {
+			t.Errorf("id %q twice", it.ID)
+		}
+		seen[it.ID] = true
+	}
+}
+
+func TestLoginToolFails(t *testing.T) {
+	cases := map[string]func(e *env){
+		"ps":         func(e *env) { e.psFails() },
+		"btm":        func(e *env) { e.btmFails() },
+		"launchctl":  func(e *env) { e.launchctlFails() },
+		"registry":   func(e *env) { e.registryFails() },
+		"print-only": func(e *env) { e.tool("launchctl", `[ "$1" = print ] && exit 1; echo '"x" => enabled'`) },
+		"disabled-only": func(e *env) {
+			e.tool("launchctl", `[ "$1" = print-disabled ] && { echo failed >&2; exit 1; }; exit 0`)
+		},
+	}
+	for name, breakIt := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := launchdEnv(t)
+			agent, parent := agentInApp(e, "com.example.agent")
+			e.btm(parent, agent, oldStyle("com.example.app", exampleBundle))
+			breakIt(e)
+			out, stderr := e.runFail(loginTarget)
+			if out != "" || stderr == "" {
+				t.Errorf("stdout %q, stderr %q", out, stderr)
+			}
+		})
+	}
+}
+
+func TestLoginAppOnlyNeedsNoLaunchctl(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	e.btm(oldStyle("com.example.app", exampleBundle))
+	e.launchctlFails()
+	onlyItem(t, e.run(loginTarget))
+}
+
+func TestProgramMissingHelper(t *testing.T) {
+	e := newEnv(t)
+	e.exe(filepath.Join(e.Root, "opt/there/tool"), "")
+	e.link(filepath.Join(e.Root, "opt/dead"), filepath.Join(e.Root, "gone"))
+	e.link(filepath.Join(e.Root, "opt/live"), filepath.Join(e.Root, "opt/there"))
+	e.exe(filepath.Join(e.Home, "bin/mine"), "")
+	cases := []struct {
+		path    string
+		missing bool
+	}{
+		{"/opt/there/tool", false},
+		{"/opt/there/gone", true},
+		{"/opt/nowhere/deep/tool", true},
+		{"/opt/dead/tool", false},
+		{"/opt/dead/deeper/tool", false},
+		{"/opt/live/tool", false},
+		{"/opt/live/gone", true},
+		{"/Volumes/Disk/tool", false},
+		{"relative/tool", false},
+		{"", false},
+		{e.Home + "/bin/mine", false},
+		{e.Home + "/bin/gone", true},
+	}
+	for _, c := range cases {
+		_, _, rc := e.bashRC(". autostart.sh; mc_program_missing '" + c.path + "'")
+		if (rc == 0) != c.missing {
+			t.Errorf("%q: status %d, missing %v", c.path, rc, c.missing)
+		}
+	}
+}
