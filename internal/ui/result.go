@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,20 +41,41 @@ type refreshMsg struct{ err error }
 // outcomeMsg carries the outcome of one finished run.
 type outcomeMsg action.Outcome
 
-// outputMsg carries a piece of a running command's output. ch is the stream
-// it came from; the next piece is read from it.
-type outputMsg struct {
-	ch   chan tea.Msg
-	text string
+// outputMsg says that output of the stream s has arrived; the UI takes it
+// with s.take.
+type outputMsg struct{ s *outputStream }
+
+// outputStream collects a running command's output. Write never waits for the
+// UI: action.Run gives up on output still being copied a second after the
+// command ends, so a slow screen would turn a finished command into a failure.
+// A write leaves a wake-up on ch unless one is pending; the outcome is sent on
+// ch after the last write.
+type outputStream struct {
+	ch  chan tea.Msg // capacity 1
+	mu  sync.Mutex
+	buf strings.Builder
 }
 
-// chanWriter sends each write as an outputMsg. It blocks until the UI reads,
-// so the outcome sent after the command ends always comes last.
-type chanWriter chan tea.Msg
+func newOutputStream() *outputStream { return &outputStream{ch: make(chan tea.Msg, 1)} }
 
-func (w chanWriter) Write(p []byte) (int, error) {
-	w <- outputMsg{chan tea.Msg(w), string(p)}
+func (s *outputStream) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	s.buf.Write(p)
+	s.mu.Unlock()
+	select {
+	case s.ch <- outputMsg{s}:
+	default:
+	}
 	return len(p), nil
+}
+
+// take returns the output collected since the last take.
+func (s *outputStream) take() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.buf.String()
+	s.buf.Reset()
+	return t
 }
 
 // listen waits for the next message of a stream.
@@ -95,9 +117,9 @@ type runState struct {
 	freeBefore, freeAfter uint64
 	beforeOK, afterOK     bool
 
-	segs    []seg        // transcript of the commands and their output
-	stream  chan tea.Msg // output and outcome of the in-flight item
-	started time.Time    // start of the in-flight item
+	segs    []seg         // transcript of the commands and their output
+	stream  *outputStream // output and outcome of the in-flight item
+	started time.Time     // start of the in-flight item
 
 	log     io.WriteCloser // nil when it could not be opened
 	logPath string
@@ -219,6 +241,7 @@ func (m Model) afterOutcome(msg outcomeMsg) (tea.Model, tea.Cmd) {
 	if m.screen != screenRun || !r.inflight || r.next >= len(r.entries) {
 		return m, nil
 	}
+	r.addOutput(r.stream.take())
 	o := action.Outcome(msg)
 	r.outs[r.next] = &o
 	took := time.Since(r.started).Round(100 * time.Millisecond)
@@ -261,28 +284,36 @@ func (m Model) advance() (Model, tea.Cmd) {
 	r.segs = append(r.segs, seg{segItem, e.Item.Name + " (" + string(e.Action) + ")"}, seg{segCmd, e.Command})
 	r.logf("\n== %s (%s)\n$ %s\n", e.Item.Name, e.Action, e.Command)
 	r.started = time.Now()
-	ch := make(chan tea.Msg)
-	r.stream = ch
+	s := newOutputStream()
+	r.stream = s
 	run := m.deps.Run
 	return m, func() tea.Msg {
-		go func() { ch <- outcomeMsg(run(ctx, e.Item, e.Action, chanWriter(ch))) }()
-		return <-ch
+		go func() { s.ch <- outcomeMsg(run(ctx, e.Item, e.Action, s)) }()
+		return <-s.ch
 	}
 }
 
-// afterOutput adds a piece of output to the transcript and the log. The
-// stream is always read on, so a command never blocks on its output.
+// afterOutput takes the output that has arrived. The stream is always read
+// on, so the outcome is received.
 func (m Model) afterOutput(msg outputMsg) (tea.Model, tea.Cmd) {
 	r := &m.run
-	if m.screen == screenRun && r.inflight && msg.ch == r.stream {
-		if n := len(r.segs); n > 0 && r.segs[n-1].kind == segOut {
-			r.segs[n-1].text += msg.text
-		} else {
-			r.segs = append(r.segs, seg{segOut, msg.text})
-		}
-		r.logf("%s", msg.text)
+	if m.screen == screenRun && r.inflight && msg.s == r.stream {
+		r.addOutput(msg.s.take())
 	}
-	return m, listen(msg.ch)
+	return m, listen(msg.s.ch)
+}
+
+// addOutput adds a piece of output to the transcript and the log.
+func (r *runState) addOutput(text string) {
+	if text == "" {
+		return
+	}
+	if n := len(r.segs); n > 0 && r.segs[n-1].kind == segOut {
+		r.segs[n-1].text += text
+	} else {
+		r.segs = append(r.segs, seg{segOut, text})
+	}
+	r.logf("%s", text)
 }
 
 func (m Model) finish() (Model, tea.Cmd) {

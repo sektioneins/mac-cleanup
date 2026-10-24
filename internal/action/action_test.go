@@ -162,7 +162,9 @@ func (w *chunkWriter) Write(p []byte) (int, error) {
 func TestRunStreamsOutput(t *testing.T) {
 	w := &chunkWriter{first: make(chan struct{})}
 	done := make(chan Outcome, 1)
-	go func() { done <- Run(context.Background(), item("echo one; echo two >&2; sleep 1; exit 2"), protocol.Delete, w) }()
+	go func() {
+		done <- Run(context.Background(), item("echo one; echo two >&2; sleep 1; exit 2"), protocol.Delete, w)
+	}()
 	select {
 	case <-w.first:
 	case <-done:

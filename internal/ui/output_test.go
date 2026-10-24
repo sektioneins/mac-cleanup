@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -148,5 +149,32 @@ func TestRescanDropsEarlierRecheck(t *testing.T) {
 	m, _ = send(m, genScanMsg{gen: m.gen, res: twoItems()})
 	if len(m.results) != 1 {
 		t.Fatalf("got %d results, want 1", len(m.results))
+	}
+}
+
+// A screen that falls behind must not turn a finished command into a
+// failure: action.Run gives up on output still being copied a second after
+// the command ends.
+func TestRunSlowScreenKeepsSuccess(t *testing.T) {
+	d, _ := fakeDeps()
+	d.Run = action.Run
+	it := item("s", "big", 9_000_000)
+	it.Commands = map[protocol.Action]string{protocol.Delete: "echo first; sleep 0.2; echo second"}
+	m, cmd := confirm(t, *d, scan.Result{Script: "s", Items: []protocol.Item{it}})
+	m, cmd = send(m, cmd())
+	msg := cmd()
+	if _, ok := msg.(outputMsg); !ok {
+		t.Fatalf("first message %T, want output", msg)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	m, _ = pump(t, m, func() tea.Msg { return msg })
+	if m.screen != screenResult {
+		t.Fatal("no result screen")
+	}
+	if o := m.run.outs[0]; o == nil || o.Err != nil {
+		t.Fatalf("outcome %+v, want success", o)
+	}
+	if v := m.View(); !strings.Contains(v, "first") || !strings.Contains(v, "second") {
+		t.Fatalf("output lost:\n%s", v)
 	}
 }
