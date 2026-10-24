@@ -71,8 +71,27 @@ is_apple() {
 	return 1
 }
 
-# Ids already used, so that a duplicate gets a distinguishing suffix.
+# Ids already used (the scanner rejects a script that prints one twice).
 used=$'\n'
+
+# claim_id ID [ALT]: set id to ID, or to ALT when ID is taken, followed by
+# (2), (3) ... until it is not taken, and remember it.
+claim_id() {
+	local n=2
+	id=$1
+	case $used in
+	*$'\n'"$id"$'\n'*) [ -z "${2:-}" ] || id=$2 ;;
+	esac
+	local base=$id
+	while :; do
+		case $used in
+		*$'\n'"$id"$'\n'*) id="$base ($n)" ;;
+		*) break ;;
+		esac
+		n=$((n + 1))
+	done
+	used="$used$id"$'\n'
+}
 
 while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r_bundle r_parent _; do
 	# Disposition: enabled/disabled, allowed/disallowed, notified.
@@ -101,12 +120,14 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 		[ -n "$name" ] || name=$(basename "$bundle" .app)
 		owner=$r_dev
 		path=$bundle
-		id="login/${r_bundle:-$bundle}"
-		case $used in
-		*$'\n'"$id"$'\n'*) id="login/$bundle" ;;
-		esac
+		# Ids have no double slash: the path comes without its first /.
+		if [ -n "$r_bundle" ]; then
+			claim_id "login/$r_bundle" "login/${bundle#/}"
+		else
+			claim_id "login/${bundle#/}"
+		fi
 
-		pids=$(mc_pids_matching "$tmp/ps" "$bundle/")
+		pids=$(mc_pids_under "$tmp/ps" "$bundle/")
 		if [ -n "$pids" ]; then
 			state=running
 			# The pids are digits only.
@@ -192,15 +213,16 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 		[ -n "$owner" ] || owner=$p_dev
 		[ -n "$owner" ] || [ "$p_type" != developer ] || owner=$r_parent
 		path=$bpath
-		id="$gui/$label"
-		case $used in
-		*$'\n'"$id"$'\n'*) id="$id ($r_url)" ;;
-		esac
+		claim_id "$gui/$label" "$gui/$label ($r_url)"
 
 		# The program inside the parent bundle.
 		program=""
 		if [ "$r_type" = "login item" ]; then
-			[ -z "$bpath" ] || program=$bpath/$rel
+			case $rel in
+			"") ;;
+			/*) program=$rel ;;
+			*) [ -z "$bpath" ] || program=$bpath/$rel ;;
+			esac
 		else
 			case $r_exe in
 			"") ;;
@@ -209,14 +231,14 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 			esac
 		fi
 
-		# An app record whose bundle id and team no installed app claims.
-		if [ "$p_type" = app ] && [ -n "$p_bundle" ]; then
-			unclaimed=$(printf '%s\t\n' "$p_bundle" | mc_unclaimed "$tmp") || exit 1
-			if [ -n "$unclaimed" ]; then
-				if [ -z "$p_team" ] || ! grep -Fixq -- "$p_team" "$tmp/teams"; then
-					orphan="app deleted"
-				fi
-			fi
+		# An app record whose bundle id and team no installed app claims
+		# and whose bundle is not on disk.
+		if [ "$p_type" = app ]; then
+			mc_app_deleted "$tmp" "$p_bundle" "$p_team" "$bpath"
+			case $? in
+			0) orphan="app deleted" ;;
+			2) exit 1 ;;
+			esac
 		fi
 		if [ -z "$orphan" ] && [ -n "$program" ] && mc_program_missing "$program"; then
 			orphan="program missing"
@@ -268,13 +290,12 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 			who="$kind of an unknown owner"
 		fi
 		if [ -n "$cmd_disable" ]; then
-			what="Disable stops it and keeps it from starting again."
+			what="Disable stops it and keeps it from starting again, but System Settings may still show it as allowed."
 		else
-			what="It is turned off and not running."
+			what="It is turned off and not running, but System Settings may still show it as allowed."
 		fi
-		explain="$who, started at every login. Program: ${program:-unknown}. $what System Settings may still show it as allowed."
+		explain="$who, started at every login. Program: ${program:-unknown}. $what"
 	fi
-	used="$used$id"$'\n'
 
 	mc_item
 	mc_field id "$id"

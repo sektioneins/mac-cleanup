@@ -363,6 +363,17 @@ func TestLaunchdProgramBehindClosedFolder(t *testing.T) {
 	}
 }
 
+// programApart moves the program of an agent out of the example bundle and
+// removes the bundle, as when the app of the parent record is deleted.
+func programApart(e *env, plist string) {
+	e.t.Helper()
+	e.plist(plist, strings.TrimSuffix(filepath.Base(plist), ".plist"), "/opt/example/tool")
+	e.exe(filepath.Join(e.Root, "opt/example/tool"), "")
+	if err := os.RemoveAll(filepath.Join(e.Root, exampleBundle)); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func TestLaunchdAppDeleted(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -384,6 +395,9 @@ func TestLaunchdAppDeleted(t *testing.T) {
 				otherApp(e, c.reg...)
 			}
 			p := userAgent(e, "com.example.agent")
+			if c.orphan == "app deleted" {
+				programApart(e, p)
+			}
 			parentID := c.parent.Identifier
 			e.btm(legacyRecord(e, os.Getuid(), "legacy agent", p, parentID), c.parent)
 			it := onlyItem(t, e.run(launchdTarget))
@@ -716,6 +730,8 @@ func TestLoginAppRunning(t *testing.T) {
 		psLine{PID: 43, PPID: 1, RSSKB: 500, Comm: exampleBundle + "/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"},
 		// A different bundle whose name extends this one.
 		psLine{PID: 44, PPID: 1, RSSKB: 9999, Comm: "/Applications/Example App Helper.app/Contents/MacOS/Helper"},
+		// A copy of the bundle under another root.
+		psLine{PID: 45, PPID: 1, RSSKB: 8888, Comm: "/Volumes/Backup" + exampleBundle + "/Contents/MacOS/Example App"},
 	)
 	it := onlyItem(t, e.run(loginTarget))
 	if it.ID != "login/com.example.app" || it.Name != "Example App" || it.Category != "Login items" || !it.Autostart() {
@@ -793,7 +809,7 @@ func TestLoginAppWithoutBundleID(t *testing.T) {
 	e.btm(rec)
 	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 5, PPID: 1, RSSKB: 10, Comm: exampleBundle + "/Contents/MacOS/main"})
 	it := onlyItem(t, e.run(loginTarget))
-	if it.ID != "login/"+exampleBundle {
+	if it.ID != "login"+exampleBundle {
 		t.Errorf("id %q", it.ID)
 	}
 	if _, ok := it.Commands[protocol.Stop]; ok || it.State != "running" || it.Default != protocol.Disable {
@@ -1179,16 +1195,22 @@ func TestLoginAppleSkipped(t *testing.T) {
 func TestLoginIDsUnique(t *testing.T) {
 	e := launchdEnv(t)
 	agent, parent := agentInApp(e, "com.example.agent")
-	again := agent
-	again.Identifier = "8.again"
-	again.URL = "Contents/Library/LaunchAgents/com.example.agent.plist"
-	twin := oldStyle("com.example.app", exampleBundle)
-	twin2 := oldStyle("com.example.app", "/Applications/Example App 2.app")
+	// Three records of one agent, with the same label and the same url.
+	a2, a3 := agent, agent
+	a2.Identifier = "8.again"
+	a3.Identifier = "8.third"
 	bundleAt(e, "/Applications/Example App 2.app")
-	e.btm(parent, agent, again, twin, twin2)
+	// Three apps with one bundle id; two of them at one path.
+	app1 := oldStyle("com.example.app", exampleBundle)
+	app2 := oldStyle("com.example.app", "/Applications/Example App 2.app")
+	app3 := app1
+	app4 := app1
+	app3.Identifier = "2.again"
+	app4.Identifier = "2.third"
+	e.btm(parent, agent, a2, a3, app1, app2, app3, app4)
 	items := e.run(loginTarget)
-	if len(items) != 4 {
-		t.Fatalf("got %+v", items)
+	if len(items) != 7 {
+		t.Fatalf("got %d items: %+v", len(items), items)
 	}
 	seen := map[string]bool{}
 	for _, it := range items {
@@ -1196,6 +1218,77 @@ func TestLoginIDsUnique(t *testing.T) {
 			t.Errorf("id %q twice", it.ID)
 		}
 		seen[it.ID] = true
+		if strings.HasPrefix(it.ID, "login//") {
+			t.Errorf("double slash in %q", it.ID)
+		}
+	}
+}
+
+func TestLoginItemAbsoluteOrEmptyURL(t *testing.T) {
+	e := launchdEnv(t)
+	bundleAt(e, exampleBundle)
+	parent := parentApp("com.example.other", "")
+	e.exe(filepath.Join(e.Root, "opt/example/helper"), "")
+	abs := registered(parent, "login item", "4.com.example.abs", "/opt/example/helper", "")
+	abs.URL = "/opt/example/helper"
+	gone := registered(parent, "login item", "4.com.example.gone", "/opt/example/gone", "")
+	gone.URL = "/opt/example/gone"
+	empty := registered(parent, "login item", "4.com.example.empty", "", "")
+	empty.URL = ""
+	e.btm(parent, abs, gone, empty)
+	items := e.run(loginTarget)
+	if len(items) != 3 {
+		t.Fatalf("got %+v", items)
+	}
+	if got := autostartItem(t, items, guiDomain()+"/com.example.abs").Orphan; got != "" {
+		t.Errorf("absolute url, orphan %q", got)
+	}
+	if got := autostartItem(t, items, guiDomain()+"/com.example.gone").Orphan; got != "program missing" {
+		t.Errorf("absolute url to nothing, orphan %q", got)
+	}
+	// Nothing to look up: not a missing program, and not the bundle itself.
+	if it := autostartItem(t, items, guiDomain()+"/com.example.empty"); it.Orphan != "" || !strings.Contains(it.Explain, "Program: unknown.") {
+		t.Errorf("empty url: %+v", it)
+	}
+}
+
+func TestLoginAgentAppDeletedNeedsBundleGone(t *testing.T) {
+	e := launchdEnv(t)
+	agent, _ := agentInApp(e, "com.example.agent")
+	gone := parentApp("com.example.gone", "")
+	agent.ParentID = gone.Identifier
+	// The registry does not know the app, but its bundle is on disk.
+	e.btm(gone, agent)
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "" {
+		t.Errorf("bundle present, orphan %q", got)
+	}
+	if err := os.RemoveAll(filepath.Join(e.Root, exampleBundle)); err != nil {
+		t.Fatal(err)
+	}
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "app deleted" {
+		t.Errorf("bundle gone, orphan %q", got)
+	}
+	// A bundle on a volume that may not be mounted is not known to be gone.
+	gone.URL = "file:///Volumes/Disk/Example%20App.app/"
+	e.btm(gone, agent)
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "" {
+		t.Errorf("volume, orphan %q", got)
+	}
+}
+
+func TestLaunchdAppDeletedNeedsBundleGone(t *testing.T) {
+	e := launchdEnv(t)
+	p := userAgent(e, "com.example.agent")
+	programApart(e, p)
+	gone := appParent("com.example.gone", "")
+	e.btm(legacyRecord(e, os.Getuid(), "legacy agent", p, gone.Identifier), gone)
+	// The bundle of the parent record is not on disk.
+	if got := onlyItem(t, e.run(launchdTarget)).Orphan; got != "app deleted" {
+		t.Errorf("bundle gone, orphan %q", got)
+	}
+	bundleAt(e, exampleBundle)
+	if got := onlyItem(t, e.run(launchdTarget)).Orphan; got != "" {
+		t.Errorf("bundle present, orphan %q", got)
 	}
 }
 

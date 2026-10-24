@@ -112,7 +112,7 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	"$HOME"/*) rel=$plist ;;
 	*) rel=${plist#"$MC_ROOT"} ;;
 	esac
-	owner="" orphan="" p_type="" p_bundle="" p_team=""
+	owner="" orphan="" p_type="" p_bundle="" p_team="" p_url=""
 	rec=$(MC_P=$rel awk -F"$_MC_US" '$1 == ENVIRON["MC_P"] { print; exit }' "$tmp/legacy")
 	if [ -n "$rec" ]; then
 		IFS=$_MC_US read -r _ r_uid r_disp r_parent <<<"$rec"
@@ -126,7 +126,7 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 				}
 				END { print (same != "" ? same : other) }' "$tmp/btm")
 			if [ -n "$prec" ]; then
-				IFS=$_MC_US read -r _ p_type _ _ p_name p_dev _ _ _ p_bundle _ p_team <<<"$prec"
+				IFS=$_MC_US read -r _ p_type _ _ p_name p_dev _ p_url _ p_bundle _ p_team <<<"$prec"
 				owner=$p_name
 				[ -n "$owner" ] || owner=$p_dev
 				[ -n "$owner" ] || [ "$p_type" != developer ] || owner=$r_parent
@@ -137,13 +137,21 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	if mc_program_missing "$program"; then
 		orphan="program missing"
 	elif [ "$p_type" = app ] && [ -n "$p_bundle" ]; then
-		# An app record whose bundle id and team no installed app claims.
-		unclaimed=$(printf '%s\t\n' "$p_bundle" | mc_unclaimed "$tmp") || exit 1
-		if [ -n "$unclaimed" ]; then
-			if [ -z "$p_team" ] || ! grep -Fixq -- "$p_team" "$tmp/teams"; then
-				orphan="app deleted"
-			fi
+		# An app record whose bundle id and team no installed app claims
+		# and whose bundle is not on disk.
+		p_path=""
+		if [ -n "$p_url" ]; then
+			p_path=$(mc_url_path "$p_url")
+			case $p_path in
+			/*) ;;
+			*) p_path="" ;;
+			esac
 		fi
+		mc_app_deleted "$tmp" "$p_bundle" "$p_team" "$p_path"
+		case $? in
+		0) orphan="app deleted" ;;
+		2) exit 1 ;;
+		esac
 	fi
 
 	# Commands. Daemons run launchctl as root; agents never need it.

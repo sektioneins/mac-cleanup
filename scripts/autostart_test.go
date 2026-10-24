@@ -119,6 +119,22 @@ mc_pids_matching "$HOME/s" '/Missing.app/' | tr '\n' ' '; echo`)
 	}
 }
 
+func TestPidsUnder(t *testing.T) {
+	e := newEnv(t)
+	e.ps(
+		psLine{10, 1, 1, "/Applications/Example App.app/Contents/MacOS/Example App"},
+		psLine{11, 10, 1, "/Applications/Example App.app/Contents/Frameworks/Helper"},
+		psLine{12, 1, 1, "/Applications/Example App.app Two/Contents/MacOS/Other"},
+		psLine{13, 1, 1, "/Volumes/Backup/Applications/Example App.app/Contents/MacOS/Example App"},
+	)
+	out := e.bash(`. autostart.sh; mc_ps_snapshot "$HOME/s"
+mc_pids_under "$HOME/s" '/Applications/Example App.app/' | tr '\n' ' '; echo
+mc_pids_under "$HOME/s" '/Missing.app/' | tr '\n' ' '; echo`)
+	if out != "10 11 \n\n" {
+		t.Errorf("out = %q", out)
+	}
+}
+
 func TestLaunchdJob(t *testing.T) {
 	e := newEnv(t)
 	e.launchd(

@@ -82,6 +82,18 @@ mc_pids_matching() {
 	}' "$1"
 }
 
+# mc_pids_under FILE PREFIX: print the pids whose command path starts with
+# PREFIX (a literal string, such as /Applications/Example.app/), so a copy of
+# the bundle under another root does not match.
+mc_pids_under() {
+	MC_TEXT=$2 awk '
+	{
+		pid = $1
+		sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[0-9]+[ \t]+/, "")
+		if (index($0, ENVIRON["MC_TEXT"]) == 1) print pid
+	}' "$1"
+}
+
 # mc_launchd_job TARGET: for a TARGET like gui/501/label or system/label, print
 # `state<TAB>pid` (the pid is empty when the job has none) from launchctl
 # print. Only the job's own state and pid lines are read, not those of the
@@ -237,4 +249,21 @@ mc_program_missing() {
 	done
 	[ -n "$d" ] || d=/
 	[ -x "$d" ]
+}
+
+# mc_app_deleted DIR BUNDLEID TEAM BUNDLEPATH: status 0 when the app is gone:
+# no installed app claims the bundle id (DIR is the mc_inventory directory),
+# none has the team id TEAM, and BUNDLEPATH (empty when unknown) does not exist.
+# Status 1 when the app may still be there and 2 when the installed apps could
+# not be read.
+mc_app_deleted() {
+	local dir=$1 id=$2 team=$3 path=$4 unclaimed
+	[ -n "$id" ] || return 1
+	unclaimed=$(printf '%s\t\n' "$id" | mc_unclaimed "$dir") || return 2
+	[ -n "$unclaimed" ] || return 1
+	if [ -n "$team" ] && grep -Fixq -- "$team" "$dir/teams"; then
+		return 1
+	fi
+	# A bundle that is there, or cannot be looked up, is not deleted.
+	[ -z "$path" ] || mc_program_missing "$path"
 }
