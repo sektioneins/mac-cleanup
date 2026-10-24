@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"bytes"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1353,5 +1354,316 @@ func TestProgramMissingHelper(t *testing.T) {
 		if (rc == 0) != c.missing {
 			t.Errorf("%q: status %d, missing %v", c.path, rc, c.missing)
 		}
+	}
+}
+
+const kextTarget = "autostart-kext"
+
+const sysextTarget = "autostart-sysext"
+
+// kextEnv is a Mac with the registry, an installed app and no kernel
+// extensions. The kext bundle is returned by kextBundle.
+func kextEnv(t *testing.T) *env {
+	t.Helper()
+	e := newEnv(t)
+	otherApp(e)
+	e.kexts()
+	return e
+}
+
+// teamApp installs an app signed by team (the registry has it, so does the
+// disk).
+func teamApp(e *env, team string) {
+	e.t.Helper()
+	path := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(path, "com.example.app", "Example")
+	otherApp(e, regRecord{Path: path, ID: "com.example.app", Team: team, Name: "Example"})
+}
+
+// kextBundle writes a bundle with the bundle id in /Library/Extensions.
+func kextBundle(e *env, file, id string) string {
+	e.t.Helper()
+	p := filepath.Join(e.Root, "Library/Extensions", file)
+	e.app(p, id, "Example Driver")
+	return p
+}
+
+func TestAutostartKextAbsent(t *testing.T) {
+	e := kextEnv(t)
+	// Only Apple's kernel extensions are loaded: nothing else is called.
+	e.kexts(kextRow{ID: "com.apple.driver.example", Wired: "0x1000"}, kextRow{ID: "COM.APPLE.Other", Wired: "0x1000"})
+	e.registryFails()
+	if items := e.run(kextTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestAutostartSysextAbsent(t *testing.T) {
+	e := newEnv(t)
+	e.sysexts(sysextRow{Team: "ZZZZZ99999", ID: "com.apple.example", Name: "Apple"})
+	e.psFails()
+	if items := e.run(sysextTarget); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
+func TestKextLoaded(t *testing.T) {
+	e := kextEnv(t)
+	bundle := kextBundle(e, "Example.kext", "com.example.driver")
+	e.codesignTeam(bundle, "ABCDE12345")
+	teamApp(e, "ABCDE12345")
+	e.kexts(kextRow{ID: "com.example.driver", Wired: "0x5dd0"})
+
+	var stdout, stderr bytes.Buffer
+	cmd := e.command(filepath.Join("targets", kextTarget+".sh"))
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr %q: the notice of kmutil must not show", stderr.String())
+	}
+	items, err := protocol.Parse(&stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := onlyItem(t, items)
+	if it.ID != "kext/com.example.driver" || it.Name != "com.example.driver" || it.Category != "Kernel extensions" || !it.Autostart() {
+		t.Errorf("unexpected identity %+v", it)
+	}
+	if it.State != "loaded" || it.Memory != 24016 || it.Enabled != "" || !it.Admin || it.Default != protocol.Stop {
+		t.Errorf("unexpected state %+v", it)
+	}
+	if it.Owner != "" || it.Orphan != "" {
+		t.Errorf("owner %q, orphan %q", it.Owner, it.Orphan)
+	}
+	if len(it.Paths) != 1 || it.Paths[0] != bundle {
+		t.Errorf("paths %v", it.Paths)
+	}
+	if len(it.Commands) != 1 || it.Commands[protocol.Stop] != "sudo kmutil unload -b 'com.example.driver'" {
+		t.Errorf("commands %v", it.Commands)
+	}
+	wantExplain := "Third-party kernel extension that is loaded now. Stop unloads it until the next boot; macOS on Apple Silicon may refuse. Only the uninstaller of the app that installed it removes it for good."
+	if it.Explain != wantExplain {
+		t.Errorf("explain %q", it.Explain)
+	}
+}
+
+func TestKextFieldCountVaries(t *testing.T) {
+	e := kextEnv(t)
+	e.kexts(
+		kextRow{ID: "com.example.one", Wired: "0x10", Linked: "1"},
+		kextRow{ID: "com.example.two", Wired: "0x20", Linked: "1 2 3 4 5 6 7 8 9 10 11 12"},
+		kextRow{ID: "com.example.one", Wired: "0x30"},
+	)
+	items := e.run(kextTarget)
+	if len(items) != 2 {
+		t.Fatalf("got %+v, want 2 items", items)
+	}
+	one, two := autostartItem(t, items, "kext/com.example.one"), autostartItem(t, items, "kext/com.example.two")
+	if one.Memory != 16 || two.Memory != 32 {
+		t.Errorf("memory %d and %d", one.Memory, two.Memory)
+	}
+	if len(one.Paths) != 0 {
+		t.Errorf("paths %v without a bundle", one.Paths)
+	}
+}
+
+func TestKextAppleSkipped(t *testing.T) {
+	e := kextEnv(t)
+	e.kexts(
+		kextRow{ID: "com.apple.driver.example", Wired: "0x1000"},
+		kextRow{ID: "Com.Apple.Other", Wired: "0x1000"},
+		kextRow{ID: "com.example.driver", Wired: "0x2000"},
+	)
+	it := onlyItem(t, e.run(kextTarget))
+	if it.ID != "kext/com.example.driver" {
+		t.Errorf("id %q", it.ID)
+	}
+}
+
+func TestKextQuoting(t *testing.T) {
+	e := kextEnv(t)
+	e.kexts(kextRow{ID: "com.example.it's", Wired: "0x1000"})
+	it := onlyItem(t, e.run(kextTarget))
+	if it.Commands[protocol.Stop] != `sudo kmutil unload -b 'com.example.it'\''s'` {
+		t.Errorf("command %q", it.Commands[protocol.Stop])
+	}
+}
+
+func TestKextAppDeleted(t *testing.T) {
+	cases := []struct {
+		name   string
+		team   string // reported by codesign; "-" makes codesign fail, "" is "not set"
+		bundle bool
+		reg    func(e *env)
+		orphan string
+	}{
+		{"team not installed", "ABCDE12345", true, nil, "app deleted"},
+		{"team installed", "ABCDE12345", true, func(e *env) { teamApp(e, "ABCDE12345") }, ""},
+		{"team installed but not mounted", "ABCDE12345", true, func(e *env) {
+			otherApp(e, regRecord{Path: "/Volumes/X/Example.app", ID: "com.example.app", Team: "ABCDE12345", Name: "Example", Unmounted: true})
+		}, ""},
+		{"other team installed", "ABCDE12345", true, func(e *env) { teamApp(e, "ZZZZZ99999") }, "app deleted"},
+		{"team not set", "", true, nil, ""},
+		{"codesign fails", "-", true, nil, ""},
+		{"no bundle", "ABCDE12345", false, nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := kextEnv(t)
+			if c.reg != nil {
+				c.reg(e)
+			}
+			if c.bundle {
+				bundle := kextBundle(e, "Example.kext", "com.example.driver")
+				if c.team != "-" {
+					e.codesignTeam(bundle, c.team)
+				} else {
+					e.codesignTeam(filepath.Join(e.Root, "elsewhere"), "ABCDE12345")
+				}
+			}
+			e.kexts(kextRow{ID: "com.example.driver", Wired: "0x5dd0"})
+			it := onlyItem(t, e.run(kextTarget))
+			if it.Orphan != c.orphan {
+				t.Errorf("orphan %q, want %q", it.Orphan, c.orphan)
+			}
+			if it.Default != protocol.Stop {
+				t.Errorf("default %q", it.Default)
+			}
+			if c.bundle == (len(it.Paths) == 0) {
+				t.Errorf("paths %v", it.Paths)
+			}
+		})
+	}
+}
+
+func TestKextBundleLookup(t *testing.T) {
+	e := kextEnv(t)
+	kextBundle(e, "Other.kext", "com.example.other")
+	want := kextBundle(e, "Wanted.kext", "com.example.driver")
+	// Files and bundles without a readable plist do not count.
+	e.write(filepath.Join(e.Root, "Library/Extensions/notes.txt"), 1)
+	if err := os.MkdirAll(filepath.Join(e.Root, "Library/Extensions/Empty.kext"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.kexts(kextRow{ID: "com.example.driver", Wired: "0x1000"})
+	it := onlyItem(t, e.run(kextTarget))
+	if len(it.Paths) != 1 || it.Paths[0] != want {
+		t.Errorf("paths %v, want %s", it.Paths, want)
+	}
+}
+
+func TestKextToolFails(t *testing.T) {
+	cases := map[string]func(e *env){
+		"kmutil":   func(e *env) { e.kmutilFails() },
+		"registry": func(e *env) { e.registryFails() },
+	}
+	for name, breakIt := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := kextEnv(t)
+			e.kexts(kextRow{ID: "com.example.driver", Wired: "0x5dd0"})
+			breakIt(e)
+			out, stderr := e.runFail(kextTarget)
+			if out != "" || stderr == "" {
+				t.Errorf("stdout %q, stderr %q", out, stderr)
+			}
+		})
+	}
+}
+
+const sysextProcess = "/Library/SystemExtensions/01234567-89AB-CDEF-0123-456789ABCDEF/com.example.ext.systemextension/Contents/MacOS/com.example.ext"
+
+func TestSysextRunning(t *testing.T) {
+	e := newEnv(t)
+	e.sysexts(sysextRow{Enabled: true, Active: true, Team: "ABCDE12345", ID: "com.example.ext", Name: "Example Extension"})
+	e.ps(
+		psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"},
+		psLine{PID: 50, PPID: 1, RSSKB: 2000, Comm: sysextProcess},
+		psLine{PID: 51, PPID: 50, RSSKB: 300, Comm: "/usr/libexec/child"},
+		psLine{PID: 52, PPID: 1, RSSKB: 700, Comm: strings.Replace(sysextProcess, "01234567", "76543210", 1)},
+		psLine{PID: 53, PPID: 1, RSSKB: 9999, Comm: "/Library/SystemExtensions/x/com.example.extra.systemextension/Contents/MacOS/x"},
+	)
+	it := onlyItem(t, e.run(sysextTarget))
+	if it.ID != "sysext/com.example.ext" || it.Name != "Example Extension" || it.Category != "System extensions" || !it.Autostart() {
+		t.Errorf("unexpected identity %+v", it)
+	}
+	if it.State != "running" || it.Memory != 3000*1024 || it.Enabled != "" || it.Admin || it.Default != "" {
+		t.Errorf("unexpected state %+v", it)
+	}
+	if it.Owner != "" || it.Orphan != "" || len(it.Paths) != 0 {
+		t.Errorf("owner %q, orphan %q, paths %v", it.Owner, it.Orphan, it.Paths)
+	}
+	if len(it.Commands) != 0 || len(it.Actions()) != 0 {
+		t.Errorf("commands %v", it.Commands)
+	}
+	wantExplain := "System extension of the team ABCDE12345, active now. Only the app that installed it can remove it, so remove it or turn it off in that app."
+	if it.Explain != wantExplain {
+		t.Errorf("explain %q", it.Explain)
+	}
+}
+
+func TestSysextStoppedAndFiltered(t *testing.T) {
+	e := newEnv(t)
+	e.sysexts(
+		sysextRow{Team: "ABCDE12345", ID: "com.example.ext", Name: "Example Extension"},
+		sysextRow{Team: "ABCDE12345", ID: "com.example.waiting", Name: "Waiting", State: "[activated waiting for user]"},
+		sysextRow{Team: "ABCDE12345", ID: "com.example.gone", Name: "Gone", State: "[terminated waiting to uninstall on reboot]"},
+		sysextRow{Team: "APPLE00000", ID: "com.apple.Example", Name: "Apple"},
+		sysextRow{Team: "", ID: "com.example.noteam", Name: "", Version: "2.0"},
+	)
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"})
+	items := e.run(sysextTarget)
+	if len(items) != 2 {
+		t.Fatalf("got %+v, want 2 items", items)
+	}
+	it := autostartItem(t, items, "sysext/com.example.ext")
+	if it.State != "stopped" || it.Memory != 0 {
+		t.Errorf("unexpected state %+v", it)
+	}
+	no := autostartItem(t, items, "sysext/com.example.noteam")
+	if no.Name != "com.example.noteam" {
+		t.Errorf("name %q, want the bundle id", no.Name)
+	}
+	if !strings.Contains(no.Explain, "unknown team") {
+		t.Errorf("explain %q", no.Explain)
+	}
+}
+
+func TestSysextMemoryCountedOnce(t *testing.T) {
+	e := newEnv(t)
+	e.sysexts(
+		sysextRow{Team: "ABCDE12345", ID: "com.example.ext", Name: "One"},
+		sysextRow{Team: "ABCDE12345", ID: "com.example.ext2", Name: "Two"},
+	)
+	// The second extension's process is a child of the first one's.
+	e.ps(
+		psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"},
+		psLine{PID: 50, PPID: 1, RSSKB: 1000, Comm: "/x/com.example.ext.systemextension/Contents/MacOS/a"},
+		psLine{PID: 51, PPID: 50, RSSKB: 500, Comm: "/x/com.example.ext2.systemextension/Contents/MacOS/b"},
+	)
+	items := e.run(sysextTarget)
+	one, two := autostartItem(t, items, "sysext/com.example.ext"), autostartItem(t, items, "sysext/com.example.ext2")
+	if one.Memory+two.Memory != 1500*1024 {
+		t.Errorf("memory %d + %d, want 1500 KiB in total", one.Memory, two.Memory)
+	}
+}
+
+func TestSysextToolFails(t *testing.T) {
+	cases := map[string]func(e *env){
+		"systemextensionsctl": func(e *env) { e.sysextFails() },
+		"ps":                  func(e *env) { e.psFails() },
+	}
+	for name, breakIt := range cases {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t)
+			e.sysexts(sysextRow{Team: "ABCDE12345", ID: "com.example.ext", Name: "Example Extension"})
+			e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"})
+			breakIt(e)
+			out, stderr := e.runFail(sysextTarget)
+			if out != "" || stderr == "" {
+				t.Errorf("stdout %q, stderr %q", out, stderr)
+			}
+		})
 	}
 }

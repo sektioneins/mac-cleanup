@@ -544,3 +544,116 @@ func (e *env) plist(path, label string, args ...string) {
 		e.t.Fatal(err)
 	}
 }
+
+// kextRow is one line of the fake `kmutil showloaded`. Wired is the hex value
+// printed in the Wired column; Linked is the <Linked Against> list (default
+// "1 2 3"), whose length changes the number of fields on the line.
+type kextRow struct {
+	ID, Wired, Linked string
+}
+
+// kexts writes a fake kmutil whose `showloaded` prints the rows in the layout
+// of the real tool (header first) and a notice on stderr, even on success.
+func (e *env) kexts(rows ...kextRow) {
+	e.t.Helper()
+	var b strings.Builder
+	b.WriteString("Index Refs Address            Size       Wired      Name (Version) UUID <Linked Against>\n")
+	for i, r := range rows {
+		linked := r.Linked
+		if linked == "" {
+			linked = "1 2 3"
+		}
+		fmt.Fprintf(&b, "%5d %4d %-18s %-10s %-10s %s (1.2.3) 01234567-89AB-CDEF-0123-456789ABCDEF <%s>\n", 260+i, 0, "0", "0x5dd0", r.Wired, r.ID, linked)
+	}
+	if err := os.WriteFile(filepath.Join(e.Bin, "kmutil.out"), []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("kmutil", `[ "$1" = showloaded ] || exit 1
+echo "No variant specified, falling back to release" >&2
+cat "$(dirname "$0")/kmutil.out"`)
+}
+
+// kmutilFails makes the fake kmutil exit 1.
+func (e *env) kmutilFails() {
+	e.t.Helper()
+	e.tool("kmutil", "echo 'kmutil: not permitted' >&2; exit 1")
+}
+
+// codesignTeam makes the fake codesign answer `-dv PATH` for path like the
+// real tool: details on stderr, ending in a TeamIdentifier line, which says
+// `not set` for an empty team. Any other path fails, as for an unsigned or
+// unreadable bundle.
+func (e *env) codesignTeam(path, team string) {
+	e.t.Helper()
+	if team == "" {
+		team = "not set"
+	}
+	list := filepath.Join(e.Bin, "codesign.list")
+	f, err := os.OpenFile(list, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	fmt.Fprintf(f, "%s\t%s\n", path, team)
+	if err := f.Close(); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("codesign", `[ "$1" = -dv ] || exit 2
+while IFS=$'\t' read -r p t; do
+	if [ "$p" = "$2" ]; then
+		echo "Executable=$p/Contents/MacOS/x" >&2
+		echo "Identifier=com.example.driver" >&2
+		echo "Format=bundle with Mach-O thin (arm64)" >&2
+		echo "TeamIdentifier=$t" >&2
+		exit 0
+	fi
+done < "$(dirname "$0")/codesign.list"
+echo "$2: code object is not signed at all" >&2
+exit 1`)
+}
+
+// sysextRow is one row of the fake `systemextensionsctl list`. State defaults
+// to "[activated enabled]"; Enabled and Active print `*`.
+type sysextRow struct {
+	Enabled, Active         bool
+	Team, ID, Version, Name string
+	State                   string
+}
+
+// sysexts writes a fake systemextensionsctl whose `list` prints the rows in
+// the layout of the real tool: a count line, a category line, the header row
+// and tab-separated rows.
+func (e *env) sysexts(rows ...sysextRow) {
+	e.t.Helper()
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d extension(s)\n", len(rows))
+	b.WriteString("--- com.apple.system_extension.network_extension (Go to 'System Settings > General > Login Items & Extensions > Network Extensions' to modify these system extension(s))\n")
+	b.WriteString("enabled\tactive\tteamID\tbundleID (version)\tname\t[state]\n")
+	star := func(v bool) string {
+		if v {
+			return "*"
+		}
+		return ""
+	}
+	for _, r := range rows {
+		state := r.State
+		if state == "" {
+			state = "[activated enabled]"
+		}
+		version := r.Version
+		if version == "" {
+			version = "1.0/1.0"
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s (%s)\t%s\t%s\n", star(r.Enabled), star(r.Active), r.Team, r.ID, version, r.Name, state)
+	}
+	if err := os.WriteFile(filepath.Join(e.Bin, "sysext.out"), []byte(b.String()), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.tool("systemextensionsctl", `[ "$1" = list ] || exit 1
+cat "$(dirname "$0")/sysext.out"`)
+}
+
+// sysextFails makes the fake systemextensionsctl exit 1.
+func (e *env) sysextFails() {
+	e.t.Helper()
+	e.tool("systemextensionsctl", "echo 'systemextensionsctl: failed' >&2; exit 1")
+}
