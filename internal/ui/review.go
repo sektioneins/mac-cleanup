@@ -302,7 +302,7 @@ func (m *Model) applyRecheck(r scan.Result) {
 	for _, k := range append([]string{}, m.revKeys...) {
 		if it, was := old[k]; was && it.Script == r.Script && !byKey[k] {
 			m.drop(k)
-			if inScan[k] {
+			if inScan[k] && !it.Autostart() {
 				m.notes = append(m.notes, it.Name+" is now below "+HumanSize(MinSize)+", removed")
 			} else {
 				m.notes = append(m.notes, it.Name+" no longer found")
@@ -391,11 +391,15 @@ type reviewLayout struct {
 func (m Model) reviewLayoutFor() reviewLayout {
 	items := m.reviewItems()
 	cur := m.reviewIndex(items)
-	var size int64
+	var disk, memory int64
 	for _, it := range items {
-		size += it.Size
+		if it.Autostart() {
+			memory += amount(it)
+		} else {
+			disk += amount(it)
+		}
 	}
-	title := " " + heading.Render("Review: "+plural(len(items), "item")+", "+HumanSize(size))
+	title := " " + heading.Render("Review: "+totalsText(len(items), disk, memory))
 	if hint := "←/→ or d/t to switch "; lipgloss.Width(title)+lipgloss.Width(hint)+1 <= m.width {
 		title = m.twoCol(title, hint)
 	}
@@ -418,7 +422,7 @@ func (m Model) reviewLayoutFor() reviewLayout {
 		if m.width > 0 {
 			w = min(w, max(m.width-15-lipgloss.Width(ch), 4))
 		}
-		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(it.Size), 9) + "   "
+		line := mark + fit(Visible(it.Name), max(w, 4)) + " " + padLeft(HumanSize(amount(it)), 9) + "   "
 		if i == cur && m.rfocus == focusItems {
 			line = rev.Render(clip(line+ch, m.width))
 		} else {

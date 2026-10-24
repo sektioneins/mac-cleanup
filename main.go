@@ -47,8 +47,15 @@ func printList(w io.Writer, results []scan.Result) {
 			continue
 		}
 		for _, it := range r.Items {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", clean(it.Category), clean(it.Name),
-				ui.HumanSize(it.Size), it.Default, clean(it.Commands[it.Default]))
+			size := ui.HumanSize(it.Size)
+			if it.Autostart() {
+				size = "mem " + ui.HumanSize(it.Memory)
+			}
+			act, cmd := string(it.Default), clean(it.Commands[it.Default])
+			if cmd == "" {
+				act, cmd = "-", "-" // no default action
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", clean(it.Category), clean(it.Name), size, act, cmd)
 		}
 	}
 }

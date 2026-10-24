@@ -52,6 +52,24 @@ func TestPrintList(t *testing.T) {
 	}
 }
 
+func TestPrintListAutostart(t *testing.T) {
+	var b strings.Builder
+	printList(&b, []scan.Result{
+		{Script: "a.sh", Items: []protocol.Item{
+			{
+				Tab: protocol.TabAutostart, Category: "Login items", Name: "Example App", Memory: 1_200_000_000,
+				Default: protocol.Disable, Commands: map[protocol.Action]string{protocol.Disable: "launchctl disable x"},
+			},
+			{Tab: protocol.TabAutostart, Category: "Login items", Name: "Other", Memory: 5_000_000},
+		}},
+	})
+	want := "Login items\tExample App\tmem 1.2 GB\tdisable\tlaunchctl disable x\n" +
+		"Login items\tOther\tmem 5 MB\t-\t-\n"
+	if b.String() != want {
+		t.Errorf("got %q, want %q", b.String(), want)
+	}
+}
+
 func TestPrintListEscapesControlCharacters(t *testing.T) {
 	var b strings.Builder
 	printList(&b, []scan.Result{

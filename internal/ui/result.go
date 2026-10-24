@@ -528,15 +528,23 @@ func (m Model) resultLines() []string {
 		}
 		return HumanSize(int64(v))
 	}
-	l := "Free before: " + free(r.beforeOK, r.freeBefore) + "   after: " + free(r.afterOK, r.freeAfter)
-	if r.beforeOK && r.afterOK {
-		gained := int64(0)
-		if r.freeAfter > r.freeBefore {
-			gained = int64(r.freeAfter - r.freeBefore)
-		}
-		l += "   gained: " + good.Render(HumanSize(gained))
+	// Stopping or disabling an autostart entry frees no disk space.
+	space := false
+	for _, e := range r.entries {
+		space = space || !e.Item.Autostart()
 	}
-	out := []string{" " + l}
+	var out []string
+	if space {
+		l := "Free before: " + free(r.beforeOK, r.freeBefore) + "   after: " + free(r.afterOK, r.freeAfter)
+		if r.beforeOK && r.afterOK {
+			gained := int64(0)
+			if r.freeAfter > r.freeBefore {
+				gained = int64(r.freeAfter - r.freeBefore)
+			}
+			l += "   gained: " + good.Render(HumanSize(gained))
+		}
+		out = append(out, " "+l)
+	}
 
 	var trashed int64
 	var failed []int
@@ -573,6 +581,9 @@ func (m Model) resultLines() []string {
 	if len(notRun) > 0 {
 		out = append(out, "", " "+caution.Bold(true).Render("Not run:"))
 		out = append(out, notRun...)
+	}
+	if len(out) > 0 && out[0] == "" {
+		out = out[1:] // no Free line above the first blank
 	}
 	return out
 }

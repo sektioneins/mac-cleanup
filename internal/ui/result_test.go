@@ -272,3 +272,31 @@ func TestResultFailureListed(t *testing.T) {
 		t.Fatal("q must quit")
 	}
 }
+
+func TestResultNoFreeLineForAutostartOnly(t *testing.T) {
+	d, _ := fakeDeps()
+	d.Free = func() (uint64, uint64, error) { return 40_000_000_000, 994_000_000_000, nil }
+	au := auto("au", 7_000_000, "running", autoActions)
+	finishAll := func(items ...protocol.Item) Model {
+		t.Helper()
+		m := loaded(t, *d, scan.Result{Script: "s", Items: items})
+		for _, it := range m.allItems() {
+			m.selected[it.Key()] = true
+		}
+		m = press(m, "enter", "enter")
+		m, cmd := send(m, tea.KeyMsg{Type: tea.KeyEnter})
+		m, _ = pump(t, m, cmd)
+		if m.screen != screenResult {
+			t.Fatal("no result screen")
+		}
+		return m
+	}
+
+	v := finishAll(au).View()
+	if strings.Contains(v, "Free before") || !strings.Contains(v, "au (disable)") {
+		t.Fatalf("autostart-only result:\n%s", v)
+	}
+	if v = finishAll(au, item("s", "sp", 5_000_000)).View(); !strings.Contains(v, "Free before: 40 GB") {
+		t.Fatalf("mixed result:\n%s", v)
+	}
+}

@@ -321,13 +321,7 @@ func (m Model) listScreen() string {
 		detail = m.detail(rows[cursor])
 	}
 	n, disk, memory := m.selectedTotals()
-	sel := "  selected: " + plural(n, "item")
-	if disk > 0 {
-		sel += ", " + HumanSize(disk) + " disk"
-	}
-	if memory > 0 {
-		sel += ", " + HumanSize(memory) + " memory"
-	}
+	sel := "  selected: " + totalsText(n, disk, memory)
 	var foot []string
 	for _, f := range m.scanFailures() {
 		foot = append(foot, danger.Render(Visible("scan failed: "+f.Script+": "+firstLine(f.Err.Error()))))

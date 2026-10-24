@@ -37,6 +37,18 @@ func amount(it protocol.Item) int64 {
 	return it.Size
 }
 
+// totalsText is "3 items" followed by the disk and memory sums that are not 0.
+func totalsText(n int, disk, memory int64) string {
+	s := plural(n, "item")
+	if disk > 0 {
+		s += ", " + HumanSize(disk) + " disk"
+	}
+	if memory > 0 {
+		s += ", " + HumanSize(memory) + " memory"
+	}
+	return s
+}
+
 // allItems returns the listed items of both tabs.
 func (m Model) allItems() []protocol.Item {
 	var out []protocol.Item

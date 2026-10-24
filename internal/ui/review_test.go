@@ -526,3 +526,94 @@ func TestEnterOnItemsJumpsToRun(t *testing.T) {
 		t.Fatal("second enter did not run")
 	}
 }
+
+// autoActions gives an autostart item disable, stop and trash commands.
+func autoActions(it *protocol.Item) {
+	it.Default = protocol.Disable
+	it.Commands = map[protocol.Action]string{
+		protocol.Disable: "cmd_disable", protocol.Stop: "cmd_stop", protocol.Trash: "cmd_trash",
+	}
+}
+
+// reviewingAll selects every listed item of both tabs and opens the review.
+func reviewingAll(t *testing.T, results ...scan.Result) Model {
+	t.Helper()
+	d, _ := fakeDeps()
+	m := loaded(t, *d, results...)
+	for _, it := range m.allItems() {
+		m.selected[it.Key()] = true
+	}
+	m = press(m, "enter")
+	if m.screen != screenReview {
+		t.Fatal("not on review screen")
+	}
+	return m
+}
+
+func TestReviewBothTabs(t *testing.T) {
+	// The autostart item comes first in the scan, the review still lists Space first.
+	m := reviewingAll(t, scan.Result{Script: "s", Items: []protocol.Item{
+		auto("au", 7_000_000, "running", autoActions),
+		item("s", "sp", 5_000_000),
+	}})
+	v := m.View()
+	before(t, v, "sp", "au")
+	for _, want := range []string{"Review: 2 items, 5 MB disk, 7 MB memory", "rm -rf x", "cmd_disable", "(•) disable"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q in:\n%s", want, v)
+		}
+	}
+	if !strings.Contains(v, "7 MB") || strings.Contains(v, "cmd_stop") {
+		t.Fatalf("amount column or unchosen command:\n%s", v)
+	}
+
+	m = press(m, "down")
+	for _, step := range []struct{ key, want, label string }{
+		{"right", "cmd_stop", "(•) stop"},
+		{"right", "cmd_trash", "(•) trash"},
+		{"left", "cmd_stop", "(•) stop"},
+		{"left", "cmd_disable", "(•) disable"},
+	} {
+		m = press(m, step.key)
+		v = m.View()
+		if !strings.Contains(v, step.want) || !strings.Contains(v, step.label) {
+			t.Fatalf("after %s want %q and %q:\n%s", step.key, step.want, step.label, v)
+		}
+		for _, other := range []string{"cmd_disable", "cmd_stop", "cmd_trash"} {
+			if other != step.want && strings.Contains(v, other) {
+				t.Fatalf("after %s unchosen command %q shown:\n%s", step.key, other, v)
+			}
+		}
+	}
+}
+
+func TestReviewTitleMemoryOnly(t *testing.T) {
+	m := reviewingAll(t, scan.Result{Script: "s", Items: []protocol.Item{auto("au", 7_000_000, "running", autoActions)}})
+	v := m.View()
+	if !strings.Contains(v, "Review: 1 item, 7 MB memory") || strings.Contains(v, "disk") {
+		t.Fatalf("title:\n%s", v)
+	}
+}
+
+func TestRecheckAutostartItems(t *testing.T) {
+	d, _ := fakeDeps()
+	warnedAuto := auto("au", 7_000_000, "running", autoActions, func(it *protocol.Item) { it.Warnings = []string{"in use"} })
+	gone := auto("gone", 1_000_000, "running", autoActions)
+	m := loaded(t, *d, scan.Result{Script: "s", Items: []protocol.Item{warnedAuto, gone}})
+	for _, it := range m.allItems() {
+		m.selected[it.Key()] = true
+	}
+	m = press(m, "enter")
+
+	// The entry is back without the warning and with no memory; it stays.
+	// The other one is gone and gets the "no longer found" note.
+	clean := auto("au", 0, "stopped", autoActions)
+	clean.Size = 0
+	m.applyRecheck(scan.Result{Script: "s", Items: []protocol.Item{clean}})
+	if got := m.reviewItems(); len(got) != 1 || got[0].ID != "au" {
+		t.Fatalf("review items %v", got)
+	}
+	if len(m.notes) != 1 || m.notes[0] != "gone no longer found" {
+		t.Fatalf("notes %q", m.notes)
+	}
+}
