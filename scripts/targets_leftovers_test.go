@@ -341,6 +341,71 @@ func TestAppLeftoversTeamlessGroup(t *testing.T) {
 	}
 }
 
+func TestAppLeftoversGroupEntitlement(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(path, "com.example.app", "Example")
+	e.registry(regRecord{Path: path, ID: "com.example.app", Name: "Example",
+		Groups: []string{"ZZZZZZZZZZ.net.other.shared", "group.Com.Example.X"}})
+	leftoverFile(e, "Group Containers/ZZZZZZZZZZ.net.other.shared/data", 5120)
+	leftoverFile(e, "Group Containers/group.com.example.x/data", 5120)
+	// Control: same team, not in the entitlement.
+	leftoverFile(e, "Group Containers/ZZZZZZZZZZ.net.other.unrelated/data", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "net.other.unrelated" {
+		t.Fatalf("got %+v, want only net.other.unrelated", items)
+	}
+}
+
+func TestAppLeftoversLockedRegistryApp(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	reg := lockedRegistryApp(e, "Opt/Registered.app", "com.example.registered")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: reg, ID: "com.example.registered", Name: "Registered"},
+	)
+	leftoverFile(e, "Containers/com.example.locked/data", 5120)
+	leftoverFile(e, "Group Containers/group.com.example.locked/data", 5120)
+	leftoverFile(e, "Containers/net.unrelated.thing/data", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "net.unrelated.thing" {
+		t.Fatalf("got %+v, want only net.unrelated.thing", items)
+	}
+}
+
+func TestAppLeftoversProtectedRegistryApp(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	reg := filepath.Join(e.Home, "Documents/Registered.app")
+	e.app(reg, "com.example.registered", "Registered")
+	e.app(filepath.Join(reg, "Contents/XPCServices/R.xpc"), "com.example.renderer", "R")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: reg, ID: "com.example.registered", Name: "Registered"},
+	)
+	leftoverFile(e, "Containers/com.example.unlisted/data", 5120)
+	leftoverFile(e, "Containers/net.unrelated.thing/data", 5120)
+	items := e.run("app-leftovers")
+	if len(items) != 1 || items[0].ID != "net.unrelated.thing" {
+		t.Fatalf("got %+v, want only net.unrelated.thing", items)
+	}
+}
+
+func TestAppLeftoversNestedBundleClaimed(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(path, "com.example.app", "Example")
+	e.app(filepath.Join(path, "Contents/XPCServices/Renderer.xpc"), "com.example.renderer", "Renderer")
+	e.registry(regRecord{Path: path, ID: "com.example.app", Name: "Example"})
+	leftoverFile(e, "Containers/com.example.renderer/data", 5120)
+	if items := e.run("app-leftovers"); len(items) != 0 {
+		t.Fatalf("got %+v, want none", items)
+	}
+}
+
 // idleFolder writes a 2 MB file at ~/Library/rel/file and ages the folder
 // rel (a path under ~/Library) 400 days. It returns the file and the folder.
 func idleFolder(e *env, rel string) (string, string) {

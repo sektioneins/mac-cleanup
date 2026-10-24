@@ -12,18 +12,47 @@ MC_LSREGISTER="$MC_ROOT/System/Library/Frameworks/CoreServices.framework/Framewo
 # fields survive `read`).
 _MC_US=$'\037'
 
+# Separator between the application-groups values of one record (they hold no
+# tab, US or GS).
+_MC_GS=$'\035'
+
 # _mc_registry_records DUMP: one line per registry record with the fields
-# path, id, team, name, displayName, executable basename and unmounted flag.
+# path, id, team, name, displayName, executable basename, unmounted flag,
+# apple flag (the id starts with com.apple., case-insensitive) and the
+# application-groups entitlement values joined by GS.
 _mc_registry_records() {
-	awk -v US="$_MC_US" '
+	awk -v US="$_MC_US" -v GS="$_MC_GS" '
 	function flush() {
 		if (path != "" || id != "")
-			print path US id US team US name US disp US exe US unm
-		path = id = team = name = disp = exe = ""
+			print path US id US team US name US disp US exe US unm US (index(tolower(id), "com.apple.") == 1 ? 1 : 0) US groups
+		path = id = team = name = disp = exe = groups = ""
 		unm = 0
+		ingrp = 0
 	}
 	function val(s) { sub(/^[^:]*:[ ]*/, "", s); return s }
+	# addvals S: add the comma separated values of S to groups, unquoted.
+	function addvals(s,    n, parts, i, v) {
+		n = split(s, parts, ",")
+		for (i = 1; i <= n; i++) {
+			v = parts[i]
+			gsub(/^[ \t\r]+|[ \t\r]+$/, "", v)
+			gsub(/^"|"$/, "", v)
+			if (v != "") groups = groups (groups == "" ? "" : GS) v
+		}
+	}
 	/^-----------------------------/ { flush(); next }
+	ingrp {
+		if ($0 ~ /^[ \t]*\);/) { ingrp = 0; next }
+		addvals($0)
+		next
+	}
+	/^[ \t]+"?com\.apple\.security\.application-groups"?[ \t]*=/ {
+		s = $0
+		sub(/^[^(]*\(/, "", s)
+		if (s ~ /\);/) { sub(/\);.*/, "", s); addvals(s) }
+		else { addvals(s); ingrp = 1 }
+		next
+	}
 	/^path:/ {
 		if (path == "") { path = val($0); sub(/ \(0x[0-9a-fA-F]+\)$/, "", path) }
 		next
@@ -100,8 +129,9 @@ EOF
 
 # _mc_registry_tagged DUMP: tagged lines from the registry records.
 _mc_registry_tagged() {
-	local path id team name disp exe unm installed lid
-	_mc_registry_records "$1" | while IFS=$_MC_US read -r path id team name disp exe unm; do
+	local path id team name disp exe unm apple groups installed g
+	local -a garr
+	_mc_registry_records "$1" | while IFS=$_MC_US read -r path id team name disp exe unm apple groups; do
 		installed=0
 		if [ "$unm" = 1 ]; then
 			installed=1
@@ -113,21 +143,27 @@ _mc_registry_tagged() {
 			continue
 		fi
 		_mc_emit installed 1
+		# Apple's own apps are not scanned for nested bundles (their ids are
+		# dropped anyway).
 		case $path in
-		*.app) [ -d "$path" ] && _mc_emit regpath "$path" ;;
+		"$MC_ROOT/System/"*) ;;
+		*.app) [ "$apple" = 1 ] || { [ -d "$path" ] && _mc_emit regpath "$path$_MC_US$id"; } ;;
 		esac
 		_mc_emit ids "$id"
 		_mc_emit teams "$team"
 		_mc_emit names "$name"
 		_mc_emit names "$disp"
 		_mc_emit names "$exe"
-		lid=$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')
-		case $lid in
-		com.apple.*)
+		if [ "$apple" = 1 ]; then
 			_mc_emit apple "$name"
 			_mc_emit apple "$disp"
-			;;
-		esac
+		fi
+		if [ -n "$groups" ]; then
+			IFS=$_MC_GS read -r -a garr <<<"$groups"
+			for g in "${garr[@]}"; do
+				_mc_emit groups "$g"
+			done
+		fi
 	done
 }
 
@@ -144,20 +180,55 @@ _mc_apple_services() {
 	done
 }
 
+# _mc_protected_dir APP: status 0 when APP lies in a place a scan could raise a
+# privacy prompt or wake a slow disk.
+_mc_protected_dir() {
+	case $1 in
+	"$HOME/Desktop/"* | "$HOME/Documents/"* | "$HOME/Downloads/"* | "$MC_ROOT/Volumes/"*) return 0 ;;
+	esac
+	return 1
+}
+
+# _mc_vendorclaim ID: tagged `vendorclaim` line with the first two labels of
+# ID, lowercase. Nothing for an id with fewer than two labels.
+_mc_vendorclaim() {
+	local lid first rest
+	lid=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case $lid in
+	*.*)
+		first=${lid%%.*}
+		rest=${lid#*.}
+		_mc_emit vendorclaim "$first.${rest%%.*}"
+		;;
+	esac
+}
+
 # _mc_nested_ids APPLIST STRICT: tagged lines for the bundle ids of the .xpc,
 # .appex and .app bundles nested in the installed apps listed in APPLIST (one
-# path per line). With STRICT=1 a folder that can't be read is an error; for
-# the registry's apps (which can sit in protected places like ~/Documents) it
-# is skipped. LaunchServices does not register them, but a sandboxed one has its
-# own ~/Library/Containers folder. One plutil call per bundle; a bundle without
-# an Info.plist or without an id is skipped, an unparsable Info.plist is an
-# error.
+# `path` per line, or `path<US>id` for the registry's apps). With STRICT=1 a
+# folder that can't be read is an error. The registry's apps (STRICT=0) can sit
+# in protected places like ~/Documents; they are not scanned there, and when
+# their Contents folder is missing or can't be read, or find reports an error,
+# they claim the vendor of their own id (`vendorclaim`) instead, because their
+# nested bundles may have been missed. LaunchServices does not register
+# nested bundles, but a sandboxed one has its own ~/Library/Containers folder.
+# Two plutil calls per bundle; a bundle without an Info.plist or without an id
+# is skipped, an unparsable Info.plist is an error.
 _mc_nested_ids() {
-	local app b plist err
-	local re='<key>CFBundleIdentifier</key>[[:space:]]*<string>([^<]+)</string>'
-	err=$(mktemp "${TMPDIR:-/tmp}/mc-nested.XXXXXX") || return 1
-	sort -u "$1" | while IFS= read -r app; do
-		[ -d "$app/Contents" ] || continue
+	local app id b plist err v
+	if ! err=$(mktemp "${TMPDIR:-/tmp}/mc-nested.XXXXXX"); then
+		_mc_emit error "cannot create a temporary file"
+		return 1
+	fi
+	sort -u "$1" | while IFS=$_MC_US read -r app id; do
+		if [ "$2" != 1 ] && _mc_protected_dir "$app"; then
+			_mc_vendorclaim "$id"
+			continue
+		fi
+		if [ ! -d "$app/Contents" ]; then
+			[ "$2" = 1 ] || _mc_vendorclaim "$id"
+			continue
+		fi
 		: >"$err"
 		find "$app/Contents" -maxdepth 7 -type d \( -name '*.xpc' -o -name '*.appex' -o -name '*.app' \) -print 2>"$err" |
 			while IFS= read -r b; do
@@ -168,9 +239,15 @@ _mc_nested_ids() {
 					_mc_emit error "cannot parse $plist"
 					continue
 				fi
-				[[ $_MC_XML =~ $re ]] && _mc_emit ids "${BASH_REMATCH[1]}"
+				v=$(plutil -extract CFBundleIdentifier raw -o - "$plist" 2>/dev/null) && _mc_emit ids "$v"
 			done
-		[ "$2" = 1 ] && [ -s "$err" ] && _mc_emit error "cannot read $app"
+		if [ -s "$err" ]; then
+			if [ "$2" = 1 ]; then
+				_mc_emit error "cannot read $app"
+			else
+				_mc_vendorclaim "$id"
+			fi
+		fi
 	done
 	rm -f "$err"
 }
@@ -181,7 +258,9 @@ _mc_split() {
 }
 
 # mc_inventory DIR: write the installed-app lists ids, teams, names, vendors,
-# apple and stale to DIR. Fails when the Launch Services registry can't be
+# apple, stale, groups (application-groups entitlements of installed apps) and
+# vendorclaim (vendor pairs of registry apps whose nested bundles could not be
+# checked; sorted, unique, possibly empty) to DIR. Fails when the Launch Services registry can't be
 # read.
 mc_inventory() {
 	local dir=$1 f
@@ -190,26 +269,29 @@ mc_inventory() {
 		rm -f "$dir/dump.raw"
 		return 1
 	fi
-	for f in ids teams names apple stale error apppath regpath installed; do : >"$dir/$f.raw"; done
+	for f in ids teams names apple stale error apppath regpath installed groups vendorclaim; do : >"$dir/$f.raw"; done
 	{
 		_mc_registry_tagged "$dir/dump.raw"
 		_mc_plist_apps "$dir/find.err"
 		_mc_apple_services
 	} | _mc_split "$dir"
 	rm -f "$dir/find.err"
-	_mc_nested_ids "$dir/apppath.raw" 1 | _mc_split "$dir"
+	# Apple's own apps under System/Applications are not scanned.
+	grep -v -F -e "$MC_ROOT/System/Applications/" "$dir/apppath.raw" >"$dir/apppath.scan"
+	_mc_nested_ids "$dir/apppath.scan" 1 | _mc_split "$dir"
+	rm -f "$dir/apppath.scan"
 	# Apps already scanned strictly are not scanned again.
-	sort -u "$dir/regpath.raw" | grep -vxF -f "$dir/apppath.raw" >"$dir/regpath.new"
+	awk -F"$_MC_US" 'NR == FNR { a[$0] = 1; next } !($1 in a)' "$dir/apppath.raw" "$dir/regpath.raw" | sort -u >"$dir/regpath.new"
 	_mc_nested_ids "$dir/regpath.new" 0 | _mc_split "$dir"
 	rm -f "$dir/regpath.new"
 	if [ -s "$dir/error.raw" ]; then
 		sed 's/^/mac-cleanup: /' "$dir/error.raw" >&2
-		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
+		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
 		return 1
 	fi
 	if [ ! -s "$dir/installed.raw" ]; then
 		echo "mac-cleanup: the Launch Services registry has no installed app records" >&2
-		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
+		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
 		return 1
 	fi
 
@@ -218,8 +300,11 @@ mc_inventory() {
 	done
 	grep -v -e '^$' -e '^0000000000$' "$dir/teams.raw" | sort -u >"$dir/teams"
 	awk -F'\t' 'BEGIN { OFS = "\t" } { $1 = tolower($1); print }' "$dir/stale.raw" >"$dir/stale"
+	for f in groups vendorclaim; do
+		tr '[:upper:]' '[:lower:]' <"$dir/$f.raw" | grep -v '^$' | sort -u >"$dir/$f"
+	done
 	awk -F. 'NF >= 3 { print $2 }' "$dir/ids" | sort -u >"$dir/vendors"
-	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed}.raw
+	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
 	return 0
 }
 

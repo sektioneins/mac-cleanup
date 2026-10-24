@@ -148,6 +148,8 @@ const lsregisterRel = "System/Library/Frameworks/CoreServices.framework/Framewor
 type regRecord struct {
 	Path, ID, Team, Name string
 	Unmounted            bool
+	// Groups are the application-groups entitlement values.
+	Groups []string
 }
 
 // registry writes a fake lsregister that prints a dump of the records.
@@ -174,6 +176,30 @@ func (e *env) registry(recs ...regRecord) {
 			field("mount state", "not mounted")
 		} else {
 			field("mount state", "mounted")
+		}
+		if len(r.Groups) > 0 {
+			field("entitlements", "6 values (...)")
+			ind := strings.Repeat(" ", 28)
+			b.WriteString(ind + "{\n")
+			b.WriteString(ind + "    \"com.apple.security.application-groups\" =     (\n")
+			for i, g := range r.Groups {
+				sep := ","
+				if i == len(r.Groups)-1 {
+					sep = ""
+				}
+				// Values are quoted, except those with a bare word.
+				if strings.HasPrefix(g, "bare:") {
+					b.WriteString(ind + "        " + strings.TrimPrefix(g, "bare:") + sep + "\n")
+				} else {
+					b.WriteString(ind + "        \"" + g + "\"" + sep + "\n")
+				}
+			}
+			b.WriteString(ind + "    );\n")
+			b.WriteString(ind + "    \"com.apple.security.app-sandbox\" = 1;\n")
+			b.WriteString(ind + "    \"some.other.key\" =     (\n")
+			b.WriteString(ind + "        \"x\"\n")
+			b.WriteString(ind + "    );\n")
+			b.WriteString(ind + "}\n")
 		}
 	}
 	b.WriteString(strings.Repeat("-", 80) + "\n")

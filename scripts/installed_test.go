@@ -449,3 +449,147 @@ func TestInventoryUnreadableRegistryApp(t *testing.T) {
 		t.Errorf("ids = %q", ids)
 	}
 }
+
+func TestInventoryGroups(t *testing.T) {
+	e := newEnv(t)
+	app := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(app, "com.example.app", "Example")
+	e.registry(
+		regRecord{Path: app, ID: "com.example.app", Name: "Example",
+			Groups: []string{"ABCDE12345.com.Example.Shared", "group.com.example.other", "bare:group.com.example.bare"}},
+		regRecord{Path: "/gone/Old.app", ID: "com.example.old", Name: "Old", Groups: []string{"ZZZZZZZZZZ.stale.group"}},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	groups := readLines(t, filepath.Join(dir, "groups"))
+	for _, want := range []string{"abcde12345.com.example.shared", "group.com.example.other", "group.com.example.bare"} {
+		if !contains(groups, want) {
+			t.Errorf("groups lack %q: %q", want, groups)
+		}
+	}
+	for _, bad := range []string{"zzzzzzzzzz.stale.group", "x", ""} {
+		if contains(groups, bad) {
+			t.Errorf("groups contain %q: %q", bad, groups)
+		}
+	}
+	if len(groups) != 3 {
+		t.Errorf("groups = %q", groups)
+	}
+}
+
+// lockedRegistryApp makes a registry-only app whose Contents can't be read.
+func lockedRegistryApp(e *env, rel, id string) string {
+	e.t.Helper()
+	reg := filepath.Join(e.Root, rel)
+	e.app(reg, id, "Registered")
+	contents := filepath.Join(reg, "Contents")
+	e.app(filepath.Join(reg, "Contents/XPCServices/Agent.xpc"), "com.example.agent", "Agent")
+	if err := os.Chmod(contents, 0); err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Cleanup(func() { _ = os.Chmod(contents, 0o755) })
+	return reg
+}
+
+func TestInventoryVendorClaim(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	reg := lockedRegistryApp(e, "Opt/Registered.app", "com.Example.registered")
+	e.registry(
+		regRecord{Path: other, ID: "net.other.app", Name: "Other"},
+		regRecord{Path: reg, ID: "com.Example.registered", Name: "Registered"},
+	)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if got := readLines(t, filepath.Join(dir, "vendorclaim")); len(got) != 1 || got[0] != "com.example" {
+		t.Errorf("vendorclaim = %q, want com.example", got)
+	}
+}
+
+func TestInventoryVendorClaimEmpty(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	e.registry(regRecord{Path: other, ID: "net.other.app", Name: "Other"})
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	if got := readLines(t, filepath.Join(dir, "vendorclaim")); len(got) != 0 {
+		t.Errorf("vendorclaim = %q, want empty", got)
+	}
+}
+
+func TestInventoryProtectedFolders(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.Root, "Applications/Other.app")
+	e.app(other, "net.other.app", "Other")
+	var recs []regRecord
+	recs = append(recs, regRecord{Path: other, ID: "net.other.app", Name: "Other"})
+	// Registry apps in places that can prompt or wake a disk are not scanned.
+	for i, p := range []string{
+		filepath.Join(e.Home, "Documents/A.app"),
+		filepath.Join(e.Home, "Desktop/B.app"),
+		filepath.Join(e.Home, "Downloads/C.app"),
+	} {
+		id := "com.example.prot" + string(rune('a'+i))
+		e.app(p, id, "P")
+		e.app(filepath.Join(p, "Contents/XPCServices/N.xpc"), "com.nested.p"+string(rune('a'+i)), "N")
+		recs = append(recs, regRecord{Path: p, ID: id, Name: "P"})
+	}
+	e.registry(recs...)
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	ids := readLines(t, filepath.Join(dir, "ids"))
+	for _, id := range ids {
+		if strings.HasPrefix(id, "com.nested.") {
+			t.Errorf("a protected app was scanned: %q", ids)
+		}
+	}
+	if got := readLines(t, filepath.Join(dir, "vendorclaim")); len(got) != 1 || got[0] != "com.example" {
+		t.Errorf("vendorclaim = %q, want com.example", got)
+	}
+}
+
+func TestInventoryNestedOwnID(t *testing.T) {
+	e := newEnv(t)
+	app := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(app, "com.example.app", "Example")
+	// A nested dictionary with an id key comes before the bundle's own id.
+	plist := filepath.Join(app, "Contents/XPCServices/R.xpc/Contents/Info.plist")
+	e.mkparent(plist)
+	body := `<?xml version="1.0"?><plist version="1.0"><dict><key>AAA</key><dict><key>CFBundleIdentifier</key><string>com.example.inner</string></dict><key>CFBundleIdentifier</key><string>com.example.outer</string></dict></plist>`
+	if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.registry(regRecord{Path: app, ID: "com.example.app", Name: "Example"})
+	dir := t.TempDir()
+	if ok, msg := e.inventoryErr(dir); !ok {
+		t.Fatalf("failed: %s", msg)
+	}
+	ids := readLines(t, filepath.Join(dir, "ids"))
+	if !contains(ids, "com.example.outer") || contains(ids, "com.example.inner") {
+		t.Errorf("ids = %q, want the bundle's own id only", ids)
+	}
+}
+
+func TestInventoryTempFileFails(t *testing.T) {
+	e := newEnv(t)
+	app := filepath.Join(e.Root, "Applications/Example.app")
+	e.app(app, "com.example.app", "Example")
+	e.registry(regRecord{Path: app, ID: "com.example.app", Name: "Example"})
+	var stderr bytes.Buffer
+	cmd := e.command("-c", ". lib.sh; . installed.sh; mc_inventory "+t.TempDir())
+	cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(e.Root, "no-such-dir"))
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil || stderr.Len() == 0 {
+		t.Errorf("err = %v, stderr = %q; want a failure with a message", err, stderr.String())
+	}
+}

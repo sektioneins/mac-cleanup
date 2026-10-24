@@ -20,7 +20,7 @@ awk -F. 'NF >= 2 { print $1 "." $2 }' "$tmp/ids" | sort -u >"$tmp/vendorpairs"
 # add ID PATH [TEAM]: print a candidate line unless it can't be a deleted
 # app's data.
 add() {
-	local id=$1 path=$2 team=${3:-} lid
+	local id=$1 path=$2 team=${3:-} lid first rest
 	# A tab or newline would corrupt the TAB separated lists.
 	case $path in
 	*$'\t'* | *$'\n'*) return 0 ;;
@@ -30,6 +30,12 @@ add() {
 	case $lid in
 	com.apple.* | is.workflow.*) return 0 ;;
 	esac
+	# A vendor with an app whose nested bundles could not be checked.
+	if [ -s "$tmp/vendorclaim" ]; then
+		first=${lid%%.*}
+		rest=${lid#*.}
+		grep -qxF -- "$first.${rest%%.*}" "$tmp/vendorclaim" && return 0
+	fi
 	if [ -n "$team" ] && grep -qx -- "$team" "$tmp/teams"; then
 		return 0
 	fi
@@ -45,6 +51,9 @@ candidates() {
 		[ -d "$p" ] && [ ! -L "$p" ] || continue
 		id=${p##*/}
 		mc_is_bundle_id "$id" || continue
+		# An application-groups entitlement of an installed app claims the
+		# whole folder name.
+		grep -qixF -- "$id" "$tmp/groups" && continue
 		team=""
 		while :; do
 			if [[ $id =~ $team_re ]]; then
@@ -59,7 +68,7 @@ candidates() {
 			fi
 		done
 		# Without a team prefix, a group of an installed app's vendor is
-		# claimed (the entitlement lists are not in the registry dump).
+		# claimed.
 		if [ -z "$team" ]; then
 			pair=$(printf '%s' "$id" | awk -F. '{ print tolower($1 "." $2) }')
 			grep -qxF -- "$pair" "$tmp/vendorpairs" && continue
@@ -113,7 +122,7 @@ awk -F'\t' '{ print length($1) "\t" $0 }' "$tmp/unclaimed" | sort -n -s |
 		paths[root] = paths[root] "\t" $2
 	}
 	END { for (i = 1; i <= n; i++) print roots[i] "\t" ids[roots[i]] paths[roots[i]] }
-	' >"$tmp/groups"
+	' >"$tmp/rootgroups"
 
 while IFS=$'\t' read -r -a f; do
 	root=${f[0]}
@@ -137,4 +146,4 @@ while IFS=$'\t' read -r -a f; do
 	mc_field default trash
 	mc_field explain "Data in ~/Library under the id $root, which no installed app claims. Nothing in it was read or changed in the last 90 days. It does not come back, and without the app it is not needed."
 	mc_end
-done <"$tmp/groups"
+done <"$tmp/rootgroups"
