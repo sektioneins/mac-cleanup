@@ -11,7 +11,8 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/mc-launchd.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
 mc_inventory "$tmp" || exit 1
 
-gui="gui/$(id -u)"
+uid=$(id -u)
+gui="gui/$uid"
 
 # The plists (regular files only) and the launchd domain each one loads into.
 # Agents from /Library load into the user's domain, daemons into system.
@@ -69,8 +70,13 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	domain=${domains[$i]}
 	i=$((i + 1))
 
+	# Without a readable Label the file name is only a guess at the label.
+	guessed=0
 	label=$(plutil -extract Label raw -o - "$plist" 2>/dev/null) || label=""
-	[ -n "$label" ] || label=$(basename "$plist" .plist)
+	if [ -z "$label" ]; then
+		label=$(basename "$plist" .plist)
+		guessed=1
+	fi
 	case $(printf '%s' "$label" | tr '[:upper:]' '[:lower:]') in
 	com.apple.*) continue ;;
 	esac
@@ -83,21 +89,38 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	esac
 	used="$used$id"$'\n'
 
+	# The plist's path as launchd and BTM name it.
+	case $plist in
+	"$HOME"/*) rel=$plist ;;
+	*) rel=${plist#"$MC_ROOT"} ;;
+	esac
+
 	# State and memory. The domains were checked above, so a job that
-	# launchctl cannot print is not loaded.
+	# launchctl cannot print is not loaded. A job that launchd loaded from
+	# another plist with the same label is not this plist's: this one is
+	# not loaded. Without a path in launchctl's output it counts as this
+	# plist's.
 	loaded=0
 	pid=""
 	if job=$(mc_launchd_job "$domain/$label"); then
-		loaded=1
-		IFS=$'\t' read -r _ pid <<<"$job"
-		case $pid in
-		*[!0-9]*) pid="" ;;
-		esac
+		rest=${job#*$'\t'}
+		jpath=${rest#*$'\t'}
+		if [ -z "$jpath" ] || [ "$jpath" = "$rel" ]; then
+			loaded=1
+			pid=${rest%%$'\t'*}
+			case $pid in
+			*[!0-9]*) pid="" ;;
+			esac
+		fi
 	fi
 	memory=0
 	state=stopped
 	if [ -n "$pid" ]; then
 		state=running
+		# Memory tie-break: a process is counted for the first plist that
+		# claims it, in the order of the folders above (the user's agents,
+		# then /Library agents, then daemons), so a job started by another
+		# job counts for whichever of them comes first.
 		memory=$(mc_tree_rss "$tmp/ps" "$tmp/claimed" "$pid")
 	fi
 
@@ -106,18 +129,25 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 		enabled=off
 	fi
 
-	# The BTM record of this plist, then its parent record (the same user's
-	# first, else any).
-	case $plist in
-	"$HOME"/*) rel=$plist ;;
-	*) rel=${plist#"$MC_ROOT"} ;;
-	esac
+	# The BTM record of this plist (the current user's first, else any),
+	# then its parent record (the same user's as the record first, else
+	# any).
 	owner="" orphan="" p_type="" p_bundle="" p_team="" p_url=""
-	rec=$(MC_P=$rel awk -F"$_MC_US" '$1 == ENVIRON["MC_P"] { print; exit }' "$tmp/legacy")
+	rec=$(MC_P=$rel MC_UID=$uid awk -F"$_MC_US" '
+		$1 == ENVIRON["MC_P"] {
+			if ($2 == ENVIRON["MC_UID"]) { same = $0; exit }
+			if (other == "") other = $0
+		}
+		END { print (same != "" ? same : other) }' "$tmp/legacy")
 	if [ -n "$rec" ]; then
 		IFS=$_MC_US read -r _ r_uid r_disp r_parent <<<"$rec"
-		r_disp=${r_disp%%,*}
-		[ "$r_disp" = disabled ] && enabled=off
+		# Disposition: enabled/disabled, allowed/disallowed, notified.
+		# Switched off in System Settings is disallowed.
+		d1=${r_disp%%,*}
+		d2=${r_disp#*,}
+		d2=${d2# }
+		d2=${d2%%,*}
+		{ [ "$d1" = disabled ] || [ "$d2" = disallowed ]; } && enabled=off
 		if [ -n "$r_parent" ]; then
 			prec=$(MC_ID=$r_parent MC_UID=$r_uid awk -F"$_MC_US" '
 				$7 == ENVIRON["MC_ID"] {
@@ -170,7 +200,9 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 		cmd_disable="$boot && $disable"
 		cmd_trash="$boot && $trash"
 	else
-		[ "$enabled" = on ] && cmd_disable=$disable
+		# A guessed label that is not loaded may not be the job's label
+		# at all: disabling it could leave the real job running.
+		[ "$enabled" = on ] && [ "$guessed" = 0 ] && cmd_disable=$disable
 		cmd_trash=$trash
 	fi
 	[ -n "$sudo_" ] && admin=1
@@ -199,6 +231,8 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	fi
 	if [ -n "$cmd_disable" ]; then
 		what="Disable stops it and keeps it from starting again; Trash also removes its plist."
+	elif [ "$guessed" = 1 ] && [ "$loaded" = 0 ]; then
+		what="Its plist can't be read, so the job may run under another name than the file's; Trash removes the plist."
 	else
 		what="It is turned off and not running; Trash removes its plist."
 	fi

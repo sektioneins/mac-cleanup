@@ -325,16 +325,16 @@ func (e *env) psFails() {
 
 // launchdJob is a loaded launchd job of the fake launchctl. Target is
 // gui/501/label or system/label; State defaults to running; the pid line is
-// printed only when PID > 0.
+// printed only when PID > 0. Path is the plist launchd loaded the job from,
+// printed as the top-level path line only when set.
 type launchdJob struct {
-	Target, State string
-	PID           int
+	Target, State, Path string
+	PID                 int
 }
 
 // text is the `launchctl print` output: tab-indented key = value lines with
 // nested blocks, which carry state and pid lines of their own.
 func (j launchdJob) text() string {
-	label := j.Target[strings.LastIndex(j.Target, "/")+1:]
 	state := j.State
 	if state == "" {
 		state = "running"
@@ -342,9 +342,11 @@ func (j launchdJob) text() string {
 	var b strings.Builder
 	b.WriteString(j.Target + " = {\n")
 	b.WriteString("\tactive count = 1\n")
-	b.WriteString("\tpath = /Users/example/Library/LaunchAgents/" + label + ".plist\n")
+	if j.Path != "" {
+		b.WriteString("\tpath = " + j.Path + "\n")
+	}
 	b.WriteString("\ttype = LaunchAgent\n")
-	b.WriteString("\tproperties = {\n\t\tstate = nested-before\n\t\tpid = 998\n\t}\n")
+	b.WriteString("\tproperties = {\n\t\tstate = nested-before\n\t\tpid = 998\n\t\tpath = /nested/before.plist\n\t}\n")
 	b.WriteString("\tstate = " + state + "\n")
 	b.WriteString("\tprogram = /Applications/Example App.app/Contents/MacOS/Example Agent\n")
 	b.WriteString("\tenvironment = {\n\t\tstate = nested-after\n\t\tpid = 999\n\t}\n")

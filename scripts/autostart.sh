@@ -95,16 +95,20 @@ mc_pids_under() {
 }
 
 # mc_launchd_job TARGET: for a TARGET like gui/501/label or system/label, print
-# `state<TAB>pid` (the pid is empty when the job has none) from launchctl
-# print. Only the job's own state and pid lines are read, not those of the
-# blocks nested in it. Status 1 when the service is not loaded.
+# `state<TAB>pid<TAB>path` from launchctl print: the pid is empty when the job
+# has none, and path (the plist launchd loaded the job from) is empty when
+# launchctl prints none. Only the job's own lines are read, not those of the
+# blocks nested in it. Empty fields sit between two tabs, so split the line
+# with parameter expansion, not with `read` (it merges the tabs). Status 1
+# when the service is not loaded.
 mc_launchd_job() {
 	local out
 	out=$(launchctl print "$1" 2>/dev/null) || return 1
 	printf '%s\n' "$out" | awk '
 	/^\tstate = / { if (state == "") state = substr($0, 10) }
 	/^\tpid = / { if (pid == "") pid = substr($0, 8) }
-	END { printf "%s\t%s\n", (state == "" ? "unknown" : state), pid }'
+	/^\tpath = / { if (path == "") path = substr($0, 9) }
+	END { printf "%s\t%s\t%s\n", (state == "" ? "unknown" : state), pid, path }'
 }
 
 # mc_launchd_domain_ok DOMAIN: status 0 when launchctl can print DOMAIN
@@ -230,8 +234,8 @@ mc_service_target() {
 # mc_program_missing PATH: status 0 when PATH is an absolute path that does
 # not exist. Paths are looked up under $MC_ROOT, except those in $HOME. A path
 # that cannot be looked up is not reported as missing: one on a volume that
-# may not be mounted, one behind a folder that cannot be searched and one
-# behind a symbolic link that points nowhere.
+# may not be mounted, one behind a folder that cannot be searched, and one
+# that is, or lies behind, a symbolic link that points nowhere.
 mc_program_missing() {
 	local p d
 	case $1 in
@@ -241,6 +245,8 @@ mc_program_missing() {
 	*) return 1 ;;
 	esac
 	[ ! -e "$p" ] || return 1
+	# The program itself is a link to something that is not there.
+	[ ! -L "$p" ] || return 1
 	d=${p%/*}
 	while [ -n "$d" ] && [ ! -d "$d" ]; do
 		# A link to something that is not there may be a drive that is gone.

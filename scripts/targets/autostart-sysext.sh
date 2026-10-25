@@ -35,6 +35,8 @@ while IFS=$_MC_US read -r id name team; do
 	state=stopped
 	if [ -n "$pids" ]; then
 		state=running
+		# Memory tie-break: a process is counted for the first extension
+		# that claims it, in the order systemextensionsctl lists them.
 		# The pids are digits only.
 		# shellcheck disable=SC2086
 		memory=$(mc_tree_rss "$tmp/ps" "$tmp/claimed" $pids)

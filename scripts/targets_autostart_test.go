@@ -537,6 +537,127 @@ func TestLaunchdUnreadableAppleName(t *testing.T) {
 	}
 }
 
+// An unreadable plist whose real label is loaded from it: the file name is
+// only a guess at the label, so nothing is run against that guess.
+func TestLaunchdUnreadablePlistGuessedLabel(t *testing.T) {
+	e := launchdEnv(t)
+	p := filepath.Join(e.Root, "Library/LaunchDaemons/a.plist")
+	e.plist(p, "com.example.real", launchdProgram)
+	e.exe(filepath.Join(e.Root, launchdProgram), "")
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 50, PPID: 1, RSSKB: 2000, Comm: launchdProgram})
+	e.launchd(launchdJob{Target: "system/com.example.real", PID: 50, Path: "/Library/LaunchDaemons/a.plist"})
+	it := onlyItem(t, e.run(launchdTarget))
+	if it.Name != "a" || it.State != "stopped" || it.Memory != 0 || it.Default != protocol.Trash {
+		t.Errorf("unexpected %+v", it)
+	}
+	if len(it.Commands) != 1 || it.Commands[protocol.Trash] == "" || strings.Contains(it.Commands[protocol.Trash], "bootout") {
+		t.Errorf("commands %v, want only a Trash without bootout", it.Commands)
+	}
+	if !strings.Contains(it.Explain, "can't be read") || !strings.Contains(it.Explain, "under another name") {
+		t.Errorf("explain %q", it.Explain)
+	}
+}
+
+// An unreadable plist whose guessed label is loaded from it keeps its commands.
+func TestLaunchdUnreadablePlistLoaded(t *testing.T) {
+	e := launchdEnv(t)
+	p := userAgent(e, "com.example.agent")
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+	e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 42, PPID: 1, RSSKB: 10, Comm: launchdProgram})
+	e.launchd(launchdJob{Target: guiDomain() + "/com.example.agent", PID: 42, Path: p})
+	it := onlyItem(t, e.run(launchdTarget))
+	if it.State != "running" || it.Commands[protocol.Stop] == "" || it.Commands[protocol.Disable] == "" || it.Default != protocol.Disable {
+		t.Errorf("unexpected %+v", it)
+	}
+}
+
+// One label in two folders: launchd's path says which plist the loaded job
+// came from. The other plist is not loaded.
+func TestLaunchdSameLabelLoadedFromOne(t *testing.T) {
+	for _, loadedHome := range []bool{true, false} {
+		t.Run(strconv.FormatBool(loadedHome), func(t *testing.T) {
+			e := launchdEnv(t)
+			home := userAgent(e, "com.example.agent")
+			sys := systemAgent(e, "com.example.agent")
+			loadedFrom, other := home, sys
+			jobPath := home
+			if !loadedHome {
+				loadedFrom, other = sys, home
+				jobPath = strings.TrimPrefix(sys, e.Root)
+			}
+			e.ps(psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"}, psLine{PID: 42, PPID: 1, RSSKB: 1000, Comm: launchdProgram})
+			e.launchd(launchdJob{Target: guiDomain() + "/com.example.agent", PID: 42, Path: jobPath})
+			items := e.run(launchdTarget)
+			if len(items) != 2 {
+				t.Fatalf("got %+v", items)
+			}
+			byPath := map[string]protocol.Item{}
+			for _, it := range items {
+				byPath[it.Paths[0]] = it
+			}
+			l, o := byPath[loadedFrom], byPath[other]
+			if l.State != "running" || l.Memory != 1000*1024 || l.Commands[protocol.Stop] == "" || !strings.Contains(l.Commands[protocol.Trash], "bootout") {
+				t.Errorf("loaded plist: %+v", l)
+			}
+			if o.State != "stopped" || o.Memory != 0 {
+				t.Errorf("other plist: %+v", o)
+			}
+			if _, ok := o.Commands[protocol.Stop]; ok || strings.Contains(o.Commands[protocol.Trash], "bootout") || strings.Contains(o.Commands[protocol.Disable], "bootout") {
+				t.Errorf("other plist commands %v", o.Commands)
+			}
+		})
+	}
+}
+
+// A legacy agent switched off in System Settings is disallowed, not disabled.
+func TestLaunchdDisallowedByBTM(t *testing.T) {
+	e := launchdEnv(t)
+	p := userAgent(e, "com.example.agent")
+	rec := legacyRecord(e, os.Getuid(), "legacy agent", p, "Example Corp")
+	rec.Disposition = "enabled, disallowed, notified"
+	e.btm(rec, developerParent("Example Corp"))
+	if it := onlyItem(t, e.run(launchdTarget)); it.Enabled != "off" {
+		t.Errorf("enabled %q, want off", it.Enabled)
+	}
+}
+
+// The user's own record of a plist wins over another user's listed before it.
+func TestLaunchdBTMRecordOfThisUser(t *testing.T) {
+	e := launchdEnv(t)
+	p := userAgent(e, "com.example.agent")
+	root := legacyRecord(e, 0, "legacy agent", p, "Example Corp")
+	root.Disposition = "disabled, allowed, notified"
+	mine := legacyRecord(e, os.Getuid(), "legacy agent", p, "Example Corp")
+	e.btm(root, mine, developerParent("Example Corp"))
+	it := onlyItem(t, e.run(launchdTarget))
+	if it.Enabled != "on" || it.Commands[protocol.Disable] == "" || it.Default != protocol.Disable {
+		t.Errorf("unexpected %+v", it)
+	}
+	// Another user's record still counts when the user has none.
+	e.btm(root, developerParent("Example Corp"))
+	if it := onlyItem(t, e.run(launchdTarget)); it.Enabled != "off" {
+		t.Errorf("fallback: enabled %q, want off", it.Enabled)
+	}
+}
+
+// A program that is a link to a volume that may not be mounted is not missing.
+func TestLaunchdProgramDanglingLink(t *testing.T) {
+	e := launchdEnv(t)
+	e.link(filepath.Join(e.Root, "opt/example/tool"), "/Volumes/Example Disk/example-tool")
+	e.plist(filepath.Join(e.Home, "Library/LaunchAgents/com.example.agent.plist"), "com.example.agent", "/opt/example/tool")
+	it := onlyItem(t, e.run(launchdTarget))
+	if it.Orphan != "" || it.Default != protocol.Disable {
+		t.Errorf("orphan %q default %q", it.Orphan, it.Default)
+	}
+}
+
 func TestLaunchdQuoting(t *testing.T) {
 	e := launchdEnv(t)
 	label := "com.example.it's"
@@ -1054,6 +1175,44 @@ func TestLoginItemHelper(t *testing.T) {
 	}
 }
 
+// An app that opens at login and registers an agent and a login item in its
+// own bundle: each helper's process counts for its own row, the app row gets
+// the rest, whatever the order of the BTM records.
+func TestLoginMemoryHelpersFirst(t *testing.T) {
+	e := launchdEnv(t)
+	agent, _ := agentInApp(e, "com.example.agent")
+	app := oldStyle("com.example.other", exampleBundle)
+	agent.ParentID = app.Identifier
+	helper := "Contents/Library/LoginItems/Example Helper.app"
+	e.exe(filepath.Join(e.Root, exampleBundle, helper, "Contents/MacOS/main"), "")
+	li := registered(app, "login item", "4.com.example.helper", helper, "")
+	li.BundleID = "com.example.helper"
+	e.btm(app, agent, li)
+	e.ps(
+		psLine{PID: 1, PPID: 0, RSSKB: 100, Comm: "/sbin/launchd"},
+		psLine{PID: 10, PPID: 1, RSSKB: 10000, Comm: exampleBundle + "/Contents/MacOS/Example App"},
+		psLine{PID: 20, PPID: 1, RSSKB: 3000, Comm: exampleBundle + "/Contents/MacOS/example-agent"},
+		psLine{PID: 30, PPID: 1, RSSKB: 2000, Comm: exampleBundle + "/" + helper + "/Contents/MacOS/main"},
+	)
+	e.launchd(
+		launchdJob{Target: guiDomain() + "/com.example.agent", PID: 20},
+		launchdJob{Target: guiDomain() + "/com.example.helper", PID: 30},
+	)
+	items := e.run(loginTarget)
+	if len(items) != 3 {
+		t.Fatalf("got %+v", items)
+	}
+	for id, kb := range map[string]int64{
+		guiDomain() + "/com.example.agent":  3000,
+		guiDomain() + "/com.example.helper": 2000,
+		"login/com.example.other":           10000,
+	} {
+		if it := autostartItem(t, items, id); it.State != "running" || it.Memory != kb*1024 {
+			t.Errorf("%s: state %q memory %d, want running %d", id, it.State, it.Memory, kb*1024)
+		}
+	}
+}
+
 func TestLoginAgentProgramMissing(t *testing.T) {
 	e := launchdEnv(t)
 	agent, parent := agentInApp(e, "com.example.agent")
@@ -1331,6 +1490,7 @@ func TestProgramMissingHelper(t *testing.T) {
 	e.exe(filepath.Join(e.Root, "opt/there/tool"), "")
 	e.link(filepath.Join(e.Root, "opt/dead"), filepath.Join(e.Root, "gone"))
 	e.link(filepath.Join(e.Root, "opt/live"), filepath.Join(e.Root, "opt/there"))
+	e.link(filepath.Join(e.Root, "opt/there/deadtool"), "/Volumes/Example Disk/example-tool")
 	e.exe(filepath.Join(e.Home, "bin/mine"), "")
 	cases := []struct {
 		path    string
@@ -1343,6 +1503,7 @@ func TestProgramMissingHelper(t *testing.T) {
 		{"/opt/dead/deeper/tool", false},
 		{"/opt/live/tool", false},
 		{"/opt/live/gone", true},
+		{"/opt/there/deadtool", false},
 		{"/Volumes/Disk/tool", false},
 		{"relative/tool", false},
 		{"", false},

@@ -138,13 +138,16 @@ mc_pids_under "$HOME/s" '/Missing.app/' | tr '\n' ' '; echo`)
 func TestLaunchdJob(t *testing.T) {
 	e := newEnv(t)
 	e.launchd(
-		launchdJob{Target: "gui/501/com.example.run", State: "running", PID: 42},
+		launchdJob{Target: "gui/501/com.example.run", State: "running", PID: 42, Path: "/Library/Launch Agents/com.example.run.plist"},
 		launchdJob{Target: "system/com.example.idle", State: "not running"},
+		launchdJob{Target: "system/com.example.wait", State: "waiting", Path: "/Library/LaunchDaemons/com.example.wait.plist"},
 	)
+	// The third field is the top-level path, not the one of a nested block.
 	out := e.bash(`. autostart.sh
 mc_launchd_job gui/501/com.example.run
-mc_launchd_job system/com.example.idle`)
-	if out != "running\t42\nnot running\t\n" {
+mc_launchd_job system/com.example.idle
+mc_launchd_job system/com.example.wait`)
+	if out != "running\t42\t/Library/Launch Agents/com.example.run.plist\nnot running\t\t\nwaiting\t\t/Library/LaunchDaemons/com.example.wait.plist\n" {
 		t.Errorf("out = %q", out)
 	}
 	stdout, _, rc := e.bashRC(`. autostart.sh; mc_launchd_job gui/501/com.example.unknown`)

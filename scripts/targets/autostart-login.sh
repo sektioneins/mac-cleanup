@@ -20,6 +20,7 @@ gui="gui/$uid"
 # apps that open at login (type app, enabled; the disabled app records are only
 # parents of other records) and the agents and login items an app registers
 # (not the legacy ones, which the launchd target lists).
+# The apps go last (see the memory tie-break below).
 MC_U=$uid awk -F"$_MC_US" '
 $1 != ENVIRON["MC_U"] { next }
 {
@@ -29,9 +30,10 @@ $1 != ENVIRON["MC_U"] { next }
 	f = $3
 	gsub(/ /, "", f)
 	f = "," f ","
-	if ($2 == "app" && d == "enabled") print
+	if ($2 == "app" && d == "enabled") print >> apps
 	else if (($2 == "agent" || $2 == "login item") && index(f, ",legacy,") == 0) print
-}' mine="$tmp/mine" "$tmp/btm" >"$tmp/cand"
+}' mine="$tmp/mine" apps="$tmp/apps" "$tmp/btm" >"$tmp/cand"
+[ ! -f "$tmp/apps" ] || cat "$tmp/apps" >>"$tmp/cand"
 [ -s "$tmp/cand" ] || exit 0
 
 # Every source must be readable: a missing one would show running or enabled
@@ -130,6 +132,10 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 		pids=$(mc_pids_under "$tmp/ps" "$bundle/")
 		if [ -n "$pids" ]; then
 			state=running
+			# Memory tie-break: a process is counted for the first row
+			# that claims it. The agents and login items come before the
+			# apps, so a helper in this bundle that runs as one of them
+			# is already counted for its own row; the app gets the rest.
 			# The pids are digits only.
 			# shellcheck disable=SC2086
 			memory=$(mc_tree_rss "$tmp/ps" "$tmp/claimed" $pids)
@@ -249,13 +255,18 @@ while IFS=$_MC_US read -r -u 3 _ r_type _ r_disp r_name r_dev r_id r_url r_exe r
 		pid=""
 		if job=$(mc_launchd_job "$gui/$label"); then
 			loaded=1
-			IFS=$'\t' read -r _ pid <<<"$job"
+			pid=${job#*$'\t'}
+			pid=${pid%%$'\t'*}
 			case $pid in
 			*[!0-9]*) pid="" ;;
 			esac
 		fi
 		if [ -n "$pid" ]; then
 			state=running
+			# Memory tie-break: a process is counted for the first row
+			# that claims it. These rows come before the apps (see the
+			# candidates above), so the job's process tree counts here
+			# and not for an app whose bundle it lies in.
 			memory=$(mc_tree_rss "$tmp/ps" "$tmp/claimed" "$pid")
 		fi
 		if MC_L=$label awk '$0 == ENVIRON["MC_L"] { found = 1 } END { exit !found }' "$tmp/disabled"; then
