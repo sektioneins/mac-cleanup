@@ -47,7 +47,7 @@ The Autostart tab is about memory. It lists what starts by itself on this Mac an
 
 Each row shows:
 
-- the memory in use: for login items, agents, daemons and system extensions the process and everything it started, so helper processes are included (a process is counted once, even if two entries would claim it); for kernel extensions the wired size that `kmutil` reports
+- the memory in use: for login items, agents, daemons and system extensions the process and everything it started, so helper processes are included (within a category a process is counted once, even if two entries would claim it; a helper inside an app bundle that also runs as a launch agent can be counted under both Login items and Agents and daemons); for kernel extensions the wired size that `kmutil` reports
 - whether it is running (loaded, for kernel extensions) or stopped
 - whether it is on or off, as far as launchd and the Background Task Management database say
 - the app it belongs to, or "owner unknown" when that can't be worked out
@@ -126,7 +126,7 @@ This scans everything and prints one tab-separated line per item: category, name
 
 Each tab keeps its own cursor, and what you select on both goes into one review. Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
 
-When it's done, mac-cleanup shows how much free space you gained. It also lists anything that failed, with its output, and anything that didn't run. Space taken by trashed items is only freed once you empty the Trash.
+When it's done, mac-cleanup shows how much free space you gained (not when only Autostart entries ran, since stopping or disabling them frees no disk space). It also lists anything that failed, with its output, and anything that didn't run. Space taken by trashed items is only freed once you empty the Trash.
 
 ## Adding a target
 

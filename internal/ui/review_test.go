@@ -563,8 +563,19 @@ func TestReviewBothTabs(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, v)
 		}
 	}
-	if !strings.Contains(v, "7 MB") || strings.Contains(v, "cmd_stop") {
-		t.Fatalf("amount column or unchosen command:\n%s", v)
+	if strings.Contains(v, "cmd_stop") {
+		t.Fatalf("unchosen command:\n%s", v)
+	}
+	// The autostart row shows its memory in the amount column (the title
+	// has 7 MB as well, so look at the row alone).
+	row := ""
+	for _, l := range strings.Split(v, "\n") {
+		if !strings.Contains(l, "Review:") && strings.Contains(l, " au ") {
+			row = l
+		}
+	}
+	if !strings.Contains(row, "7 MB") {
+		t.Fatalf("amount column of the autostart row %q:\n%s", row, v)
 	}
 
 	m = press(m, "down")
