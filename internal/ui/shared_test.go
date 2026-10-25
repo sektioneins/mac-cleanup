@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -154,5 +157,88 @@ func TestRecheckReusesRoundEnv(t *testing.T) {
 	checkScans(t, *scans, []string{"w"}, "MC_SHARED_X=1")
 	if !strings.Contains(m.View(), "[ run ]") {
 		t.Fatalf("re-check not applied:\n%s", m.View())
+	}
+}
+
+// A re-check runs the script by the path the round discovered, not by the
+// base name the scan stores in the items.
+func TestRecheckUsesScriptPath(t *testing.T) {
+	warn := true
+	d, _, scans := sharedDeps(t, func(s string) []protocol.Item {
+		it := item(filepath.Base(s), "g", 9_000_000)
+		if warn {
+			it.Warnings = []string{"busy"}
+		}
+		return []protocol.Item{it}
+	})
+	m := New([]string{"/x/targets/a.sh", "/x/targets/b.sh"}, *d)
+	m = drain(t, m, m.Init())
+	m.selected["a.sh/g"] = true
+	m = press(m, "enter")
+	if m.screen != screenReview {
+		t.Fatal("not on review screen")
+	}
+	*scans = nil
+	warn = false
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = drain(t, m, cmd)
+	if len(*scans) != 1 || (*scans)[0].script != "/x/targets/a.sh" {
+		t.Fatalf("re-check scanned %v, want /x/targets/a.sh", *scans)
+	}
+	if !strings.Contains(m.View(), "[ run ]") {
+		t.Fatalf("re-check not applied:\n%s", m.View())
+	}
+}
+
+// A warned item whose script is not among the round's paths gets a failed
+// re-check (the block stays), never a run of the bare name.
+func TestRecheckUnknownScript(t *testing.T) {
+	d, _ := fakeDeps()
+	var scans []string
+	d.Scan = func(s string, _ []string) scan.Result {
+		scans = append(scans, s)
+		return scan.Result{Script: s}
+	}
+	m := New([]string{"/x/targets/a.sh"}, *d)
+	m, _ = send(m, scanMsg(scan.Result{Script: "other.sh", Items: []protocol.Item{
+		item("other.sh", "g", 9_000_000, func(it *protocol.Item) { it.Warnings = []string{"busy"} }),
+	}}))
+	m.selected["other.sh/g"] = true
+	m = press(m, "enter")
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = drain(t, m, cmd)
+	if len(scans) != 0 {
+		t.Fatalf("scanned %v", scans)
+	}
+	if v := m.View(); !strings.Contains(v, "re-check of other.sh failed") || !strings.Contains(v, "( run: blocked )") {
+		t.Fatalf("want a failed re-check that keeps the block:\n%s", v)
+	}
+}
+
+// With the real scanner, a re-check started from another working directory
+// finds the script.
+func TestRecheckRealScanOtherDir(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "targets", "w.sh")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "printf 'item\\nid\\tg\\nname\\tG\\ncategory\\tDeveloper\\nsize\\t9000000\\ngrade\\tregenerates\\ndefault\\tdelete\\nexplain\\te\\ncmd_delete\\ttrue\\nend\\n'\n"
+	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	d, _ := fakeDeps()
+	d.Scan = func(s string, env []string) scan.Result { return scan.Run(context.Background(), s, env) }
+	m := New([]string{script}, *d)
+	m, _ = send(m, scanMsg(scan.Result{Script: "w.sh", Items: []protocol.Item{
+		item("w.sh", "g", 9_000_000, func(it *protocol.Item) { it.Warnings = []string{"busy"} }),
+	}}))
+	m.selected["w.sh/g"] = true
+	m = press(m, "enter")
+	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = drain(t, m, cmd)
+	if v := m.View(); !strings.Contains(v, "[ run ]") || strings.Contains(v, "failed") {
+		t.Fatalf("re-check did not find the script:\n%s", v)
 	}
 }

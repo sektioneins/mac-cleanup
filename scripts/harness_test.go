@@ -92,9 +92,18 @@ func (e *env) running(patterns ...string) {
 	}
 }
 
+// command runs /bin/bash with args in the sandbox. MC_SHARED_* variables of
+// the developer's environment are dropped (as the scan does); tests that want
+// them add them with withEnv.
 func (e *env) command(args ...string) *exec.Cmd {
 	cmd := exec.Command("/bin/bash", args...)
-	cmd.Env = append(os.Environ(),
+	var base []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "MC_SHARED_") {
+			base = append(base, kv)
+		}
+	}
+	cmd.Env = append(base,
 		"HOME="+e.Home,
 		"MC_ROOT="+e.Root,
 		"PATH="+e.Bin+":/usr/bin:/bin:/usr/sbin:/sbin",

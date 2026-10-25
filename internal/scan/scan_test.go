@@ -151,3 +151,45 @@ func TestRunEnv(t *testing.T) {
 		t.Fatalf("items %+v", r.Items)
 	}
 }
+
+// MC_SHARED_* variables in mac-cleanup's own environment never reach a
+// script: only the round's env counts.
+func TestRunDropsInheritedShared(t *testing.T) {
+	t.Setenv("MC_SHARED_BTM_ERR", "stale")
+	t.Setenv("MC_SHARED_OTHER", "stale")
+	p := write(t, filepath.Join(t.TempDir(), "env.sh"), `printf 'item\nid\t%s\nname\tN\ncategory\tC\nsize\t10\ngrade\tregenerates\ndefault\tdelete\nexplain\t%s %s\ncmd_delete\ttrue\nend\n' "$MC_SHARED_BTM" "${MC_SHARED_BTM_ERR-unset}" "${MC_SHARED_OTHER-unset}"`+"\n")
+	r := Run(context.Background(), p, []string{"MC_SHARED_BTM=fresh"})
+	if r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if len(r.Items) != 1 || r.Items[0].ID != "fresh" || r.Items[0].Explain != "unset unset" {
+		t.Fatalf("items %+v", r.Items)
+	}
+}
+
+func TestSharedDropsInheritedShared(t *testing.T) {
+	t.Setenv("MC_SHARED_X", "stale")
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "x.sh"), `printf '%s' "${MC_SHARED_X-unset}"`+"\n")
+	if got := Shared(context.Background(), dir); !reflect.DeepEqual(got, []string{"MC_SHARED_X=unset"}) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A NUL byte cannot go into the environment: the source counts as failed, and
+// a NUL in its stderr does not reach the message.
+func TestSharedNUL(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "n.sh"), `printf 'a\0b\n'`+"\n")
+	write(t, filepath.Join(dir, "shared", "o.sh"), `printf 'bo\0om\n' >&2; exit 1`+"\n")
+	got := Shared(context.Background(), dir)
+	want := []string{"MC_SHARED_N_ERR=n.sh printed a NUL byte", "MC_SHARED_O_ERR=boom"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// The entries are usable as an environment.
+	p := write(t, filepath.Join(dir, "targets", "t.sh"), record+"x\n")
+	if r := Run(context.Background(), p, got); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+}

@@ -382,3 +382,17 @@ func TestSourceWithInstalled(t *testing.T) {
 		}
 	}
 }
+
+// The harness drops MC_SHARED_* variables of the developer's environment, so
+// a target reads sfltool itself.
+func TestHarnessDropsInheritedShared(t *testing.T) {
+	t.Setenv("MC_SHARED_BTM_ERR", "stale")
+	t.Setenv("MC_SHARED_BTM", "stale")
+	e := newEnv(t)
+	e.btm(btmSample()...)
+	want := e.output(e.command("shared/btm.sh"))
+	out := e.bash(`. autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`)
+	if out != want {
+		t.Fatalf("mc_btm wrote %q, want %q", out, want)
+	}
+}

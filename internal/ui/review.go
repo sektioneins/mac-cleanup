@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -248,7 +250,9 @@ func (m *Model) drop(key string) {
 }
 
 // recheck re-runs the scripts of the warned items, one scan per script, with
-// the environment of the current scan round (no new shared step).
+// the environment of the current scan round (no new shared step). Items carry
+// the script's base name; the scan runs the round's path of that script. A
+// name with no path gives a failed re-check, never a run of the bare name.
 func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 	seen := map[string]bool{}
 	var cmds []tea.Cmd
@@ -257,14 +261,32 @@ func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 			continue
 		}
 		seen[it.Script] = true
-		script, scanFn, gen, env := it.Script, m.deps.Scan, m.gen, m.env
-		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(script, env)} })
+		name, gen := it.Script, m.gen
+		path, ok := m.scriptPath(name)
+		if !ok {
+			cmds = append(cmds, func() tea.Msg {
+				return recheckMsg{gen, scan.Result{Script: name, Err: fmt.Errorf("%s: script not found among the scanned scripts", name)}}
+			})
+			continue
+		}
+		scanFn, env := m.deps.Scan, m.env
+		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(path, env)} })
 	}
 	if len(cmds) == 0 {
 		return m, nil
 	}
 	m.notes = nil
 	return m, tea.Batch(cmds...)
+}
+
+// scriptPath returns the round's path of the script with base name name.
+func (m Model) scriptPath(name string) (string, bool) {
+	for _, p := range m.scripts {
+		if filepath.Base(p) == name {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // applyRecheck replaces the script's items by the fresh ones. Review items the
