@@ -609,8 +609,13 @@ func TestLaunchdSameLabelLoadedFromOne(t *testing.T) {
 			if o.State != "stopped" || o.Memory != 0 {
 				t.Errorf("other plist: %+v", o)
 			}
-			if _, ok := o.Commands[protocol.Stop]; ok || strings.Contains(o.Commands[protocol.Trash], "bootout") || strings.Contains(o.Commands[protocol.Disable], "bootout") {
-				t.Errorf("other plist commands %v", o.Commands)
+			// Disabling the label would keep the loaded plist's job from
+			// starting as well: Trash only.
+			if len(o.Commands) != 1 || o.Commands[protocol.Trash] == "" || strings.Contains(o.Commands[protocol.Trash], "bootout") || o.Default != protocol.Trash {
+				t.Errorf("other plist commands %v default %q, want only a Trash without bootout", o.Commands, o.Default)
+			}
+			if !strings.Contains(o.Explain, "launchd runs this label from another plist, so Trash removes only this file.") {
+				t.Errorf("other plist explain %q", o.Explain)
 			}
 		})
 	}

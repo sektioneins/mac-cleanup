@@ -98,9 +98,10 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	# State and memory. The domains were checked above, so a job that
 	# launchctl cannot print is not loaded. A job that launchd loaded from
 	# another plist with the same label is not this plist's: this one is
-	# not loaded. Without a path in launchctl's output it counts as this
-	# plist's.
+	# not loaded, and its label belongs to that other plist (foreign).
+	# Without a path in launchctl's output it counts as this plist's.
 	loaded=0
+	foreign=0
 	pid=""
 	if job=$(mc_launchd_job "$domain/$label"); then
 		rest=${job#*$'\t'}
@@ -111,6 +112,8 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 			case $pid in
 			*[!0-9]*) pid="" ;;
 			esac
+		else
+			foreign=1
 		fi
 	fi
 	memory=0
@@ -201,8 +204,10 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 		cmd_trash="$boot && $trash"
 	else
 		# A guessed label that is not loaded may not be the job's label
-		# at all: disabling it could leave the real job running.
-		[ "$enabled" = on ] && [ "$guessed" = 0 ] && cmd_disable=$disable
+		# at all: disabling it could leave the real job running. A
+		# foreign label is the other plist's: disabling it would keep
+		# that job from starting too.
+		[ "$enabled" = on ] && [ "$guessed" = 0 ] && [ "$foreign" = 0 ] && cmd_disable=$disable
 		cmd_trash=$trash
 	fi
 	[ -n "$sudo_" ] && admin=1
@@ -231,6 +236,8 @@ while [ "$i" -lt "${#plists[@]}" ]; do
 	fi
 	if [ -n "$cmd_disable" ]; then
 		what="Disable stops it and keeps it from starting again; Trash also removes its plist."
+	elif [ "$foreign" = 1 ]; then
+		what="launchd runs this label from another plist, so Trash removes only this file."
 	elif [ "$guessed" = 1 ] && [ "$loaded" = 0 ]; then
 		what="Its plist can't be read, so the job may run under another name than the file's; Trash removes the plist."
 	else
