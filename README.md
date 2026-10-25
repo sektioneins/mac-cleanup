@@ -43,16 +43,16 @@ The Autostart tab is about memory. It lists what starts by itself on this Mac an
 | Login items | apps that open at login, and the background items and agents that an app registers for itself |
 | Agents and daemons | launch agents from `~/Library/LaunchAgents` and `/Library/LaunchAgents`, launch daemons from `/Library/LaunchDaemons` |
 | Kernel extensions | third-party kernel extensions that are loaded now |
-| System extensions | third-party system extensions |
+| System extensions | third-party system extensions that are active and enabled |
 
 Each row shows:
 
-- the memory in use, which counts the process and everything it started, so helper processes are included (a process is counted once, even if two entries would claim it)
+- the memory in use: for login items, agents, daemons and system extensions the process and everything it started, so helper processes are included (a process is counted once, even if two entries would claim it); for kernel extensions the wired size that `kmutil` reports
 - whether it is running (loaded, for kernel extensions) or stopped
 - whether it is on or off, as far as launchd and the Background Task Management database say
 - the app it belongs to, or "owner unknown" when that can't be worked out
 
-The header shows the memory of everything that is running. An entry is marked as an orphan when its program no longer exists ("program missing") or when the app it belongs to has been deleted ("app deleted"). An entry whose owner is unknown is never called an orphan.
+The header shows the memory of everything that is running. An entry is marked as an orphan when its program no longer exists ("program missing"), or when the app it belongs to has been identified and is no longer installed ("app deleted"). "Program missing" does not depend on knowing the owner, but "app deleted" does: an owner that can't be worked out is never guessed to be a deleted app.
 
 Autostart items never have Delete. What you can do depends on the kind:
 
@@ -60,13 +60,13 @@ Autostart items never have Delete. What you can do depends on the kind:
 |---|---|---|---|
 | Launch agent or daemon | unloads the job until the next login or boot | unloads it and tells launchd not to start it again | unloads it, then moves its plist to the Trash |
 | Agent or login item registered by an app | unloads the job | unloads it and disables it | none |
-| App that opens at login | quits the app | removes it from the login items | none |
+| App that opens at login | quits the app, only while it runs and its bundle id is known | removes it from the login items | none |
 | Kernel extension | unloads it until the next boot | none | none |
 | System extension | none | none | none |
 
-Disable is the default when an item has it, otherwise Stop, otherwise Trash. A launch agent or daemon whose program is missing defaults to Trash, because its plist points at nothing. A job that isn't loaded has no Stop, and one that is already off has no Disable. macOS lets only the app that installed a system extension remove it, so those rows say "no action" and can't be selected. Kernel extensions are listed only while they are loaded, and macOS on Apple Silicon may refuse to unload one.
+The default action depends on the kind. A launch agent or daemon defaults to Disable if it has it, otherwise Stop, otherwise Trash, and to Trash when its program is missing, because its plist points at nothing. An agent or item registered by an app defaults to Disable, or to Stop when only that is left, and has no default when it is neither loaded nor on. An app that opens at login defaults to Disable, except that a running app that is switched off in System Settings defaults to Stop. Kernel extensions default to Stop. A job that isn't loaded has no Stop, and Disable is missing only when a job is neither loaded nor on. macOS lets only the app that installed a system extension remove it, so those rows say "no action" and can't be selected. Kernel extensions are listed only while they are loaded, and macOS on Apple Silicon may refuse to unload one.
 
-System Settings can keep showing an item as allowed after you disabled it here. A "running" entry is not a warning: stopping running things is the point of the tab. If one of the sources can't be read (the Background Task Management database, `launchctl`, `kmutil` or `systemextensionsctl`), that target fails and the error list on the main screen says so, rather than listing everything as unowned.
+System Settings can keep showing an item as allowed after you disabled it here. A "running" entry is not a warning: stopping running things is the point of the tab. If one of the sources can't be read (`ps`, the Background Task Management database, `launchctl`, `kmutil` or `systemextensionsctl`), that target fails and the error list on the main screen says so, rather than listing everything as unowned.
 
 ## How it decides
 
@@ -76,7 +76,7 @@ Every item has a grade:
 - **◐ re-download**: things you can get back, but only by downloading or reinstalling them yourself.
 - **○ may need**: things that don't come back on their own, such as an old Java version or an app you haven't opened for a year.
 
-Well-known items that regenerate default to Delete. Anything obscure or uncertain defaults to Trash, so you can still restore it. You can switch either way in the review. The pane under the list explains what each item is, whether it comes back and what removing it costs.
+This section and the grades are about the Space tab; the Autostart section above describes its defaults. Well-known items that regenerate default to Delete. Anything obscure or uncertain defaults to Trash, so you can still restore it. You can switch either way in the review. The pane under the list explains what each item is, whether it comes back and what removing it costs.
 
 Some safety rules hold throughout:
 
@@ -111,7 +111,7 @@ To see what would be offered without opening the UI, run:
 ./mac-cleanup -list
 ```
 
-This scans everything and prints one tab-separated line per item: category, name, size, default action and its command. It changes nothing.
+This scans everything and prints one tab-separated line per item: category, name, size, default action and its command. For Autostart items the size column shows the memory, as `mem` and the amount. It changes nothing.
 
 ## Keys
 
@@ -124,7 +124,7 @@ This scans everything and prints one tab-separated line per item: category, name
 | Running | `ctrl+c`, `q` or `esc` stop after the current item; a second `ctrl+c` interrupts it, unless it runs as admin |
 | Done | `↑`/`↓`, `pgup`/`pgdn` scroll through the output and summary, `r` back to the list and scan again, `q` quit |
 
-Each tab keeps its own cursor and collapsed categories, and what you select on both goes into one review. Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
+Each tab keeps its own cursor, and what you select on both goes into one review. Running anything always takes two presses of `enter` in the review: the first moves to the run button, the second runs. While it runs, each command and its output appear as they happen.
 
 When it's done, mac-cleanup shows how much free space you gained. It also lists anything that failed, with its output, and anything that didn't run. Space taken by trashed items is only freed once you empty the Trash.
 
@@ -152,7 +152,7 @@ end
 
 A `warn` line, for example when Gradle is still running, blocks the item until it is skipped or re-checked clean.
 
-An item for the Autostart tab sets `tab` to `autostart`. It then needs `id`, `name`, `category`, `explain`, `memory` and `state`, and it has no `size` or `grade`. The extra keys exist only with that tab, and a record that uses one without it is rejected:
+An item for the Autostart tab sets `tab` to `autostart`. It then needs `id`, `name`, `category`, `explain`, `memory` and `state`, and it does not use `size` or `grade`. The extra keys exist only with that tab, and a record that uses one without it is rejected:
 
 | Key | Value |
 |---|---|
