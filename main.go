@@ -60,16 +60,18 @@ func printList(w io.Writer, results []scan.Result) {
 	}
 }
 
-// listMode scans every script (in parallel) and prints the items. It never
-// runs an item command.
-func listMode(w io.Writer, scripts []string) {
+// listMode runs the shared sources of dir once, then scans every script (in
+// parallel) with their environment and prints the items. It never runs an
+// item command.
+func listMode(w io.Writer, dir string, scripts []string) {
+	env := scan.Shared(context.Background(), dir)
 	results := make([]scan.Result, len(scripts))
 	var wg sync.WaitGroup
 	for i, s := range scripts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = scan.Run(context.Background(), s)
+			results[i] = scan.Run(context.Background(), s, env)
 		}()
 	}
 	wg.Wait()
@@ -115,7 +117,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *list {
-		listMode(stdout, scripts)
+		listMode(stdout, sdir, scripts)
 		return 0
 	}
 
@@ -123,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		free = "/"
 	}
-	if _, err := tea.NewProgram(ui.New(scripts, ui.DefaultDeps(free)), tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(ui.New(scripts, ui.DefaultDeps(free, sdir)), tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintln(stderr, "mac-cleanup:", err)
 		return 1
 	}

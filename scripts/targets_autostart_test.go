@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1829,6 +1830,38 @@ func TestSysextToolFails(t *testing.T) {
 			out, stderr := e.runFail(sysextTarget)
 			if out != "" || stderr == "" {
 				t.Errorf("stdout %q, stderr %q", out, stderr)
+			}
+		})
+	}
+}
+
+// With the records shared through MC_SHARED_BTM (as the scan does), both BTM
+// targets give the same items as when they read sfltool themselves, and do not
+// call it; a shared error makes them fail with its message.
+func TestAutostartSharedBTM(t *testing.T) {
+	for _, target := range []string{launchdTarget, loginTarget} {
+		t.Run(target, func(t *testing.T) {
+			e := launchdEnv(t)
+			p := userAgent(e, "com.example.agent")
+			agent, parent := agentInApp(e, "com.example.login")
+			e.btm(legacyRecord(e, os.Getuid(), "legacy agent", p, "Example Corp"), developerParent("Example Corp"), parent, agent)
+			e.launchd(launchdJob{Target: guiDomain() + "/com.example.agent"}, launchdJob{Target: guiDomain() + "/com.example.login"})
+			want := e.run(target)
+			if len(want) != 1 {
+				t.Fatalf("with sfltool: %+v", want)
+			}
+			shared := e.output(e.command("shared/btm.sh"))
+			calls := e.btmCalls()
+			got := e.runWith(target, "MC_SHARED_BTM="+shared)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("shared records gave\n%+v\nwant\n%+v", got, want)
+			}
+			stdout, stderr, rc := e.runRC(withEnv(e.command(filepath.Join("targets", target+".sh")), "MC_SHARED_BTM_ERR=boom"))
+			if rc == 0 || stdout != "" || !strings.Contains(stderr, "mac-cleanup: boom") {
+				t.Errorf("shared error: rc = %d, stdout = %q, stderr = %q", rc, stdout, stderr)
+			}
+			if b, err := os.ReadFile(calls); err == nil {
+				t.Errorf("sfltool was called: %s", b)
 			}
 		})
 	}

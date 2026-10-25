@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -251,6 +252,85 @@ func TestBTMFails(t *testing.T) {
 	_, stderr, rc = e.bashRC(`. autostart.sh; mc_btm "$HOME/b"`)
 	if rc != 1 || stderr == "" {
 		t.Errorf("no header: rc = %d, stderr = %q; want 1 and a message", rc, stderr)
+	}
+}
+
+// btmSample is a few BTM records of two sections.
+func btmSample() []btmRecord {
+	return []btmRecord{
+		{UID: 501, Type: "login item", Flags: "sandboxed", Disposition: "enabled, allowed, notified",
+			Name: "Example Helper", Developer: "Example Corp", TeamID: "ABCDE12345",
+			Identifier: "4.com.example.helper", URL: "Contents/Library/LoginItems/Example%20Helper.app",
+			BundleID: "com.example.helper", ParentID: "2.com.example.app"},
+		{UID: -2, Type: "legacy daemon", Flags: "legacy", Disposition: "enabled, allowed, notified",
+			Name: "Example Daemon", Identifier: "10.com.example.daemon",
+			URL: "file:///Library/LaunchDaemons/com.example.daemon.plist", ParentID: "Example Corp"},
+	}
+}
+
+// The shared source prints exactly the lines mc_btm writes and ignores the
+// shared variables (it is their source).
+func TestBTMSource(t *testing.T) {
+	e := newEnv(t)
+	e.btm(btmSample()...)
+	want := e.bash(`. autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`)
+	if strings.Count(want, "\n") != 2 {
+		t.Fatalf("mc_btm wrote %q", want)
+	}
+	got := e.output(withEnv(e.command("shared/btm.sh"), "MC_SHARED_BTM=bogus", "MC_SHARED_BTM_ERR=bogus"))
+	if got != want {
+		t.Errorf("btm.sh printed\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestBTMSourceFails(t *testing.T) {
+	e := newEnv(t)
+	e.btmFails()
+	_, want, _ := e.bashRC(`. autostart.sh; mc_btm "$HOME/b"`)
+	stdout, stderr, rc := e.runRC(e.command("shared/btm.sh"))
+	if rc != 1 || stdout != "" || stderr != want || want == "" {
+		t.Errorf("rc = %d, stdout = %q, stderr = %q; want 1, nothing and %q", rc, stdout, stderr, want)
+	}
+}
+
+func TestBTMShared(t *testing.T) {
+	e := newEnv(t)
+	calls := e.btmCalls()
+	shared := fields("501", "app", "", "enabled", "Example App", "", "2.com.example.app", "", "", "", "", "") +
+		fields("0", "app", "", "disabled", "Example Other", "", "3.com.example.other", "", "", "", "", "")
+	for _, c := range []struct{ value, want string }{
+		{shared, shared},
+		{strings.TrimSuffix(shared, "\n"), shared},
+		{"", ""},
+		{"\n", ""},
+	} {
+		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`), "MC_SHARED_BTM="+c.value)
+		out, stderr, rc := e.runRC(cmd)
+		if rc != 0 || out != c.want {
+			t.Errorf("MC_SHARED_BTM=%q: rc = %d, out = %q, stderr = %q; want %q", c.value, rc, out, stderr, c.want)
+		}
+	}
+	if b, err := os.ReadFile(calls); err == nil {
+		t.Errorf("sfltool was called: %s", b)
+	}
+}
+
+func TestBTMSharedErr(t *testing.T) {
+	e := newEnv(t)
+	calls := e.btmCalls()
+	for _, c := range []struct{ value, want string }{
+		{"mac-cleanup: could not read the background task records (sfltool dumpbtm failed)", "mac-cleanup: could not read the background task records (sfltool dumpbtm failed)\n"},
+		{"btm.sh failed: exit status 2", "mac-cleanup: btm.sh failed: exit status 2\n"},
+	} {
+		// The error wins over a value that is set as well.
+		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b"`), "MC_SHARED_BTM_ERR="+c.value, "MC_SHARED_BTM=")
+		_, stderr, rc := e.runRC(cmd)
+		if rc != 1 || stderr != c.want {
+			t.Errorf("rc = %d, stderr = %q; want 1 and %q", rc, stderr, c.want)
+		}
+	}
+	if b, err := os.ReadFile(calls); err == nil {
+		t.Errorf("sfltool was called: %s", b)
 	}
 }
 

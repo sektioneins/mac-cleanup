@@ -140,7 +140,7 @@ func TestRecheckClears(t *testing.T) {
 	m := reviewing(t, scan.Result{Script: "w", Items: []protocol.Item{warned("g")}})
 	d, _ := fakeDeps()
 	m.deps = *d
-	m.deps.Scan = func(s string) scan.Result {
+	m.deps.Scan = func(s string, _ []string) scan.Result {
 		return scan.Result{Script: s, Items: []protocol.Item{item("w", "g", 9_000_000)}}
 	}
 	m, cmd := send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
@@ -297,7 +297,7 @@ func TestRecheckBelowMinSizeNote(t *testing.T) {
 
 func recheckCmds(t *testing.T, m Model, scans *[]string, fresh map[string][]protocol.Item) Model {
 	t.Helper()
-	m.deps.Scan = func(s string) scan.Result {
+	m.deps.Scan = func(s string, _ []string) scan.Result {
 		*scans = append(*scans, s)
 		return scan.Result{Script: s, Items: fresh[s]}
 	}

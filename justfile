@@ -19,7 +19,7 @@ race:
 lint:
     gofmt -l . | (! grep .)
     go vet ./...
-    shellcheck -s bash scripts/lib.sh scripts/installed.sh scripts/autostart.sh scripts/targets/*.sh
+    shellcheck -s bash scripts/lib.sh scripts/installed.sh scripts/autostart.sh scripts/shared/*.sh scripts/targets/*.sh
 
 # Everything before a commit.
 check: lint race build

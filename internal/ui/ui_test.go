@@ -21,7 +21,8 @@ type calls struct {
 func fakeDeps() (*Deps, *calls) {
 	c := &calls{}
 	d := &Deps{
-		Scan: func(script string) scan.Result { return scan.Result{Script: script} },
+		Shared: func() []string { return nil },
+		Scan:   func(script string, _ []string) scan.Result { return scan.Result{Script: script} },
 		Run: func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 			return action.Outcome{Key: it.Key(), Action: a}
 		},

@@ -118,6 +118,36 @@ func TestRunListMode(t *testing.T) {
 	}
 }
 
+// -list runs the shared step once and gives its env to every target.
+func TestRunListModeShared(t *testing.T) {
+	dir := t.TempDir()
+	count := filepath.Join(dir, "count")
+	files := map[string]string{
+		"shared/x.sh":  "echo run >> '" + count + "'\nprintf shared-value\n",
+		"targets/a.sh": "printf 'item\\nid\\ta\\nname\\ta %s\\ncategory\\tDeveloper\\nsize\\t2000\\ngrade\\tregenerates\\ndefault\\tdelete\\nexplain\\te\\ncmd_delete\\ttrue\\nend\\n' \"$MC_SHARED_X\"\n",
+		"targets/b.sh": "printf 'item\\nid\\tb\\nname\\tb %s\\ncategory\\tDeveloper\\nsize\\t2000\\ngrade\\tregenerates\\ndefault\\tdelete\\nexplain\\te\\ncmd_delete\\ttrue\\nend\\n' \"$MC_SHARED_X\"\n",
+	}
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr strings.Builder
+	if code := run([]string{"-scripts", dir, "-list"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if want := "Developer\ta shared-value\t2 KB\tdelete\ttrue\nDeveloper\tb shared-value\t2 KB\tdelete\ttrue\n"; stdout.String() != want {
+		t.Errorf("stdout %q, want %q", stdout.String(), want)
+	}
+	if b, err := os.ReadFile(count); err != nil || string(b) != "run\n" {
+		t.Errorf("shared step runs: %q (%v), want one", b, err)
+	}
+}
+
 func TestResolveExe(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real", "mac-cleanup")

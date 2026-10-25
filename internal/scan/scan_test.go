@@ -41,7 +41,7 @@ func TestDiscover(t *testing.T) {
 
 func TestRunOK(t *testing.T) {
 	p := write(t, filepath.Join(t.TempDir(), "ok.sh"), record+"one\n")
-	r := Run(context.Background(), p)
+	r := Run(context.Background(), p, nil)
 	if r.Err != nil {
 		t.Fatal(r.Err)
 	}
@@ -52,7 +52,7 @@ func TestRunOK(t *testing.T) {
 
 func TestRunExitCode(t *testing.T) {
 	p := write(t, filepath.Join(t.TempDir(), "bad.sh"), "echo boom >&2\nexit 3\n")
-	r := Run(context.Background(), p)
+	r := Run(context.Background(), p, nil)
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "boom") || !strings.Contains(r.Err.Error(), "bad.sh") {
 		t.Fatalf("err = %v", r.Err)
 	}
@@ -63,7 +63,7 @@ func TestRunExitCode(t *testing.T) {
 
 func TestRunMalformed(t *testing.T) {
 	p := write(t, filepath.Join(t.TempDir(), "mal.sh"), "echo garbage\n")
-	r := Run(context.Background(), p)
+	r := Run(context.Background(), p, nil)
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "mal.sh") || len(r.Items) != 0 {
 		t.Fatalf("result: %+v", r)
 	}
@@ -71,7 +71,7 @@ func TestRunMalformed(t *testing.T) {
 
 func TestRunDuplicateIDs(t *testing.T) {
 	p := write(t, filepath.Join(t.TempDir(), "dup.sh"), record+"x\n"+record+"x\n")
-	r := Run(context.Background(), p)
+	r := Run(context.Background(), p, nil)
 	if r.Err == nil || !strings.Contains(r.Err.Error(), "duplicate") || len(r.Items) != 0 {
 		t.Fatalf("result: %+v", r)
 	}
@@ -82,11 +82,72 @@ func TestRunTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	r := Run(ctx, p)
+	r := Run(ctx, p, nil)
 	if r.Err == nil {
 		t.Fatal("expected error")
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("took %v", d)
+	}
+}
+
+func TestShared(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "x.sh"), "echo one\necho two\n")
+	write(t, filepath.Join(dir, "shared", "y.sh"), "echo noise >&2\necho boom >&2\necho >&2\nexit 1\n")
+	write(t, filepath.Join(dir, "shared", "big.sh"), "head -c 262145 /dev/zero | tr '\\0' a\n")
+	write(t, filepath.Join(dir, "shared", "notes.txt"), "")
+	write(t, filepath.Join(dir, "targets", "t.sh"), "echo target >&2; exit 1\n")
+	got := Shared(context.Background(), dir)
+	want := []string{"MC_SHARED_X=one\ntwo\n", "MC_SHARED_Y_ERR=boom"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestSharedLimit(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "max.sh"), "head -c 262144 /dev/zero | tr '\\0' a\n")
+	got := Shared(context.Background(), dir)
+	if len(got) != 1 || len(got[0]) != len("MC_SHARED_MAX=")+262144 {
+		t.Fatalf("got %d entries", len(got))
+	}
+}
+
+func TestSharedNames(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "b-tm.2.sh"), "printf v\n")
+	write(t, filepath.Join(dir, "shared", "a.sh"), "exit 3\n")
+	got := Shared(context.Background(), dir)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "MC_SHARED_A_ERR=a.sh failed: exit status 3") || got[1] != "MC_SHARED_B_TM_2=v" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSharedTimeout(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "slow.sh"), "sleep 5\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	got := Shared(ctx, dir)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "MC_SHARED_SLOW_ERR=slow.sh failed: ") || strings.Contains(got[0], "\n") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSharedNone(t *testing.T) {
+	if got := Shared(context.Background(), t.TempDir()); len(got) != 0 {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRunEnv(t *testing.T) {
+	p := write(t, filepath.Join(t.TempDir(), "env.sh"), `printf 'item\nid\t%s\nname\tN\ncategory\tC\nsize\t10\ngrade\tregenerates\ndefault\tdelete\nexplain\t%s\ncmd_delete\ttrue\nend\n' "$MC_SHARED_X" "$HOME"`+"\n")
+	r := Run(context.Background(), p, []string{"MC_SHARED_X=from-env", "HOME=/later/wins"})
+	if r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if len(r.Items) != 1 || r.Items[0].ID != "from-env" || r.Items[0].Explain != "/later/wins" {
+		t.Fatalf("items %+v", r.Items)
 	}
 }

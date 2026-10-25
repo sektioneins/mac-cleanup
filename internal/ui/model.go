@@ -22,7 +22,11 @@ const MinSize = 1_000_000
 
 // Deps are the side effects the UI uses, replaceable in tests.
 type Deps struct {
-	Scan func(script string) scan.Result
+	// Shared runs the shared sources once for a scan round and returns the
+	// environment entries every target of that round gets.
+	Shared func() []string
+	// Scan runs one target script with the environment entries of its round.
+	Scan func(script string, env []string) scan.Result
 	// Run runs the item's command and copies its output to out as it comes.
 	Run     func(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome
 	Reveal  func(path string) error
@@ -35,10 +39,12 @@ type Deps struct {
 	OpenLog func() (io.WriteCloser, string, error)
 }
 
-// DefaultDeps wires the real scanner, runner and free-space probe for freePath.
-func DefaultDeps(freePath string) Deps {
+// DefaultDeps wires the real scanner (shared sources from scriptsDir), runner
+// and free-space probe for freePath.
+func DefaultDeps(freePath, scriptsDir string) Deps {
 	return Deps{
-		Scan: func(s string) scan.Result { return scan.Run(context.Background(), s) },
+		Shared: func() []string { return scan.Shared(context.Background(), scriptsDir) },
+		Scan:   func(s string, env []string) scan.Result { return scan.Run(context.Background(), s, env) },
 		Run: func(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome {
 			return action.Run(ctx, it, a, out)
 		},
@@ -70,6 +76,13 @@ func openLog() (io.WriteCloser, string, error) {
 
 type scanMsg scan.Result
 
+// sharedMsg carries the environment of scan round gen once its shared step
+// is done; the round's target scans start then.
+type sharedMsg struct {
+	gen int
+	env []string
+}
+
 // genScanMsg is a scan result from Init; results of an earlier scan round
 // (before a rescan) are dropped.
 type genScanMsg struct {
@@ -97,6 +110,7 @@ type Model struct {
 	deps    Deps
 	scripts []string
 	gen     int           // scan round, raised by each rescan
+	env     []string      // environment of the round's scans and re-checks
 	results []scan.Result // in arrival order
 	free    freeMsg
 	hasFree bool
@@ -126,22 +140,31 @@ type Model struct {
 	width, height int
 }
 
-// New creates the model; Init starts one scan per script and a free-space probe.
+// New creates the model; Init starts the scan round and a free-space probe.
 func New(scripts []string, d Deps) Model {
 	return Model{deps: d, scripts: scripts, selected: map[string]bool{}, width: 80, height: 24}
 }
 
+// Init runs the round's shared step (the scans start when it is done) and the
+// free-space probe.
 func (m Model) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(m.scripts)+1)
+	gen, shared, free := m.gen, m.deps.Shared, m.deps.Free
+	return tea.Batch(
+		func() tea.Msg { return sharedMsg{gen, shared()} },
+		func() tea.Msg {
+			f, t, err := free()
+			return freeMsg{f, t, err}
+		},
+	)
+}
+
+// startScans starts one scan per script, each with the round's environment.
+func (m Model) startScans() tea.Cmd {
+	cmds := make([]tea.Cmd, 0, len(m.scripts))
 	for _, s := range m.scripts {
-		s := s
-		gen := m.gen
-		cmds = append(cmds, func() tea.Msg { return genScanMsg{gen, m.deps.Scan(s)} })
+		gen, env, scanFn := m.gen, m.env, m.deps.Scan
+		cmds = append(cmds, func() tea.Msg { return genScanMsg{gen, scanFn(s, env)} })
 	}
-	cmds = append(cmds, func() tea.Msg {
-		f, t, err := m.deps.Free()
-		return freeMsg{f, t, err}
-	})
 	return tea.Batch(cmds...)
 }
 
@@ -149,6 +172,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case sharedMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.env = msg.env
+		return m, m.startScans()
 	case genScanMsg:
 		if msg.gen != m.gen {
 			return m, nil

@@ -115,7 +115,19 @@ func (e *env) output(cmd *exec.Cmd) string {
 // run executes targets/<target>.sh and parses its records.
 func (e *env) run(target string) []protocol.Item {
 	e.t.Helper()
-	out := e.output(e.command(filepath.Join("targets", target+".sh")))
+	return e.runWith(target)
+}
+
+// withEnv appends environment entries to cmd (later entries win).
+func withEnv(cmd *exec.Cmd, extra ...string) *exec.Cmd {
+	cmd.Env = append(cmd.Env, extra...)
+	return cmd
+}
+
+// runWith is run with extra environment entries, such as MC_SHARED_BTM.
+func (e *env) runWith(target string, extra ...string) []protocol.Item {
+	e.t.Helper()
+	out := e.output(withEnv(e.command(filepath.Join("targets", target+".sh")), extra...))
 	items, err := protocol.Parse(strings.NewReader(out))
 	if err != nil {
 		e.t.Fatalf("parse %s output: %v\n%s", target, err, out)
@@ -283,8 +295,14 @@ func (e *env) atime(path string) time.Time {
 // exit status (a failure is not fatal).
 func (e *env) bashRC(snippet string) (string, string, int) {
 	e.t.Helper()
+	return e.runRC(e.command("-c", ". lib.sh; "+snippet))
+}
+
+// runRC runs cmd and returns stdout, stderr and the exit status (a failure is
+// not fatal).
+func (e *env) runRC(cmd *exec.Cmd) (string, string, int) {
+	e.t.Helper()
 	var stdout, stderr bytes.Buffer
-	cmd := e.command("-c", ". lib.sh; "+snippet)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if err == nil {
@@ -515,6 +533,15 @@ func (e *env) btm(recs ...btmRecord) {
 	}
 	e.tool("sfltool", `[ "$1" = dumpbtm ] || exit 1
 cat "$(dirname "$0")/btm.out"`)
+}
+
+// btmCalls makes the fake sfltool record each call in Bin/sfltool.calls and
+// exit 1; it returns that file's path, which exists only after a call.
+func (e *env) btmCalls() string {
+	e.t.Helper()
+	calls := filepath.Join(e.Bin, "sfltool.calls")
+	e.tool("sfltool", `echo "$*" >> "$(dirname "$0")/sfltool.calls"; echo 'sfltool: called' >&2; exit 1`)
+	return calls
 }
 
 // btmFails makes the fake sfltool exit 1.

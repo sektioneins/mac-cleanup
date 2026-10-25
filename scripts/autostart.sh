@@ -5,7 +5,9 @@
 #   . "$(dirname "$0")/../autostart.sh"
 # Everything here only reads (ps, launchctl print, sfltool dumpbtm); the tools
 # are called by name so tests can put stubs first on PATH. The only files
-# written are the ones a function is told to write.
+# written are the ones a function is told to write. The scan reads the
+# background task records once per round (shared/btm.sh) and passes them in
+# MC_SHARED_BTM or the failure in MC_SHARED_BTM_ERR; mc_btm uses those.
 
 # Field separator between the parts of a record (not whitespace, so empty
 # fields survive `read`). installed.sh sets the same value.
@@ -135,17 +137,42 @@ mc_disabled_labels() {
 	}' >"$2"
 }
 
-# mc_btm FILE: write the Background Task Management records (sfltool dumpbtm)
-# to FILE, one line per record with the fields below joined by $_MC_US:
+# mc_btm FILE: write the Background Task Management records to FILE, one line
+# per record (see mc_btm_read). When the scan shared them, they come from
+# MC_SHARED_BTM (an empty value means no records) and sfltool is not called;
+# when the shared read failed (MC_SHARED_BTM_ERR), its message goes to stderr
+# and the status is 1. Without either, mc_btm_read runs sfltool itself.
+mc_btm() {
+	if [ -n "${MC_SHARED_BTM_ERR+set}" ]; then
+		case $MC_SHARED_BTM_ERR in
+		"mac-cleanup: "*) printf '%s\n' "$MC_SHARED_BTM_ERR" >&2 ;;
+		*) printf 'mac-cleanup: %s\n' "$MC_SHARED_BTM_ERR" >&2 ;;
+		esac
+		return 1
+	fi
+	if [ -n "${MC_SHARED_BTM+set}" ]; then
+		local recs=${MC_SHARED_BTM%$'\n'}
+		if [ -n "$recs" ]; then
+			printf '%s\n' "$recs" >"$1"
+		else
+			: >"$1"
+		fi
+		return 0
+	fi
+	mc_btm_read >"$1"
+}
+
+# mc_btm_read: print the Background Task Management records (sfltool dumpbtm),
+# one line per record with the fields below joined by $_MC_US:
 #   uid type flags disposition name developer identifier url exepath bundleid
 #   parentid teamid
 # The uid comes from the section header (it can be negative); type is the word
 # before ` (0x…)`; flags and disposition are the bracket contents without the
 # spaces around them; `(null)` is an empty field. Identifiers keep their
 # number prefix (see mc_btm_id) and URLs stay percent-encoded. All sections
-# are written; callers filter by uid. Status 1 when sfltool fails or prints no
-# section.
-mc_btm() {
+# are printed; callers filter by uid. Status 1 (and nothing printed) when
+# sfltool fails or prints no section.
+mc_btm_read() {
 	local out
 	if ! out=$(sfltool dumpbtm 2>/dev/null); then
 		echo "mac-cleanup: could not read the background task records (sfltool dumpbtm failed)" >&2
@@ -192,7 +219,7 @@ mc_btm() {
 		else if (key == "Bundle Identifier") bundle = val
 		else if (key == "Parent Identifier") parent = val
 	}
-	END { flush() }' >"$1"
+	END { flush() }'
 }
 
 # mc_btm_id ID: print ID without the number prefix of BTM identifiers

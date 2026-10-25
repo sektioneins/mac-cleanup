@@ -247,7 +247,8 @@ func (m *Model) drop(key string) {
 	delete(m.ract, key)
 }
 
-// recheck re-runs the scripts of the warned items, one scan per script.
+// recheck re-runs the scripts of the warned items, one scan per script, with
+// the environment of the current scan round (no new shared step).
 func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 	seen := map[string]bool{}
 	var cmds []tea.Cmd
@@ -256,8 +257,8 @@ func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 			continue
 		}
 		seen[it.Script] = true
-		script, scanFn, gen := it.Script, m.deps.Scan, m.gen
-		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(script)} })
+		script, scanFn, gen, env := it.Script, m.deps.Scan, m.gen, m.env
+		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(script, env)} })
 	}
 	if len(cmds) == 0 {
 		return m, nil
