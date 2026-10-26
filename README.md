@@ -4,7 +4,7 @@ A terminal UI that finds reclaimable disk space on a Mac and the things that sta
 
 ```
  mac-cleanup                                     free: 41.2 GB of 994 GB
- [Space]
+ [Space]   Autostart   scanning 18/19 ██████████████████░░  app-leftovers
 ──────────────────────────────────────────────────────────────────────────
 ▾ Developer                                                      18.4 GB
 > [ ] Xcode DerivedData                      9.1 GB  ● regenerates
@@ -17,7 +17,7 @@ A terminal UI that finds reclaimable disk space on a Mac and the things that sta
 
 ## What it looks for
 
-The main screen has two tabs, Space and Autostart. Each target is a small bash script in `scripts/targets/`.
+The main screen has two tabs, Space and Autostart. Each target is a small bash script in `scripts/targets/`. A tab runs its targets at the same time, and while they run, the line with the tabs shows how many have finished and the names of those still running, as many as fit.
 
 ### Space
 
@@ -177,7 +177,7 @@ just lint        # gofmt, go vet, shellcheck
 just check       # all of the above, then build
 ```
 
-The UI is written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Colours come from your terminal's own palette, and setting `NO_COLOR` turns them off.
+The UI is written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Colours come from your terminal's own palette, and setting `NO_COLOR` turns them off. Each tab has its own colour, and the current one is shown in reverse; without colour it is in brackets, as in the example at the top.
 
 ## Licence
 
