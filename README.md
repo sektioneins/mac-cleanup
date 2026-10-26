@@ -181,4 +181,4 @@ The UI is written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbl
 
 ## Licence
 
-Copyright 2026 Ben Fuhrmannek. Licensed under the [Apache License, Version 2.0](LICENSE).
+Copyright 2026 SektionEins GmbH (Ben Fuhrmannek). Licensed under the [Apache License, Version 2.0](LICENSE).
