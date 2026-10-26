@@ -287,18 +287,21 @@ mc_program_missing() {
 }
 
 # mc_app_deleted DIR BUNDLEID TEAM BUNDLEPATH: status 0 when the app is gone:
-# no installed app claims the bundle id (DIR is the mc_inventory directory),
-# none has the team id TEAM, and BUNDLEPATH (empty when unknown) does not exist.
-# Status 1 when the app may still be there and 2 when the installed apps could
-# not be read.
+# BUNDLEPATH (empty when unknown) does not exist, no installed app claims the
+# bundle id and none has the team id TEAM. The installed apps are read into DIR
+# (mc_inventory_once) only once the bundle is known to be missing or unknown,
+# since reading them is slow. Status 1 when the app may still be there and 2
+# when the installed apps could not be read.
 mc_app_deleted() {
 	local dir=$1 id=$2 team=$3 path=$4 unclaimed
 	[ -n "$id" ] || return 1
+	# A bundle that is there, or cannot be looked up, is not deleted.
+	[ -z "$path" ] || mc_program_missing "$path" || return 1
+	mc_inventory_once "$dir" || return 2
 	unclaimed=$(printf '%s\t\n' "$id" | mc_unclaimed "$dir") || return 2
 	[ -n "$unclaimed" ] || return 1
 	if [ -n "$team" ] && grep -Fixq -- "$team" "$dir/teams"; then
 		return 1
 	fi
-	# A bundle that is there, or cannot be looked up, is not deleted.
-	[ -z "$path" ] || mc_program_missing "$path"
+	return 0
 }

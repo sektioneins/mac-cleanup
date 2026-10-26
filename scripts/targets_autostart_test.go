@@ -751,7 +751,6 @@ func TestLaunchdToolFails(t *testing.T) {
 		"ps":         func(e *env) { e.psFails() },
 		"btm":        func(e *env) { e.btmFails() },
 		"launchctl":  func(e *env) { e.launchctlFails() },
-		"registry":   func(e *env) { e.registryFails() },
 		"print-only": func(e *env) { e.tool("launchctl", `[ "$1" = print ] && exit 1; echo '"x" => enabled'`) },
 		"disabled-only": func(e *env) {
 			e.tool("launchctl", `[ "$1" = print-disabled ] && { echo failed >&2; exit 1; }; exit 0`)
@@ -767,6 +766,25 @@ func TestLaunchdToolFails(t *testing.T) {
 				t.Errorf("stdout %q, stderr %q", out, stderr)
 			}
 		})
+	}
+}
+
+// The installed apps are read only for a parent app whose bundle is not on
+// disk: without the registry the scan works while the bundle is there and
+// fails when it is gone.
+func TestLaunchdRegistryOnlyWhenNeeded(t *testing.T) {
+	e := launchdEnv(t)
+	p := userAgent(e, "com.example.agent")
+	gone := appParent("com.example.gone", "")
+	e.btm(legacyRecord(e, os.Getuid(), "legacy agent", p, gone.Identifier), gone)
+	bundleAt(e, exampleBundle)
+	e.registryFails()
+	if got := onlyItem(t, e.run(launchdTarget)).Orphan; got != "" {
+		t.Errorf("bundle present, orphan %q", got)
+	}
+	programApart(e, p)
+	if out, stderr := e.runFail(launchdTarget); out != "" || stderr == "" {
+		t.Errorf("bundle gone: stdout %q, stderr %q", out, stderr)
 	}
 }
 
@@ -1463,7 +1481,6 @@ func TestLoginToolFails(t *testing.T) {
 		"ps":         func(e *env) { e.psFails() },
 		"btm":        func(e *env) { e.btmFails() },
 		"launchctl":  func(e *env) { e.launchctlFails() },
-		"registry":   func(e *env) { e.registryFails() },
 		"print-only": func(e *env) { e.tool("launchctl", `[ "$1" = print ] && exit 1; echo '"x" => enabled'`) },
 		"disabled-only": func(e *env) {
 			e.tool("launchctl", `[ "$1" = print-disabled ] && { echo failed >&2; exit 1; }; exit 0`)
@@ -1480,6 +1497,25 @@ func TestLoginToolFails(t *testing.T) {
 				t.Errorf("stdout %q, stderr %q", out, stderr)
 			}
 		})
+	}
+}
+
+// See TestLaunchdRegistryOnlyWhenNeeded.
+func TestLoginRegistryOnlyWhenNeeded(t *testing.T) {
+	e := launchdEnv(t)
+	agent, _ := agentInApp(e, "com.example.agent")
+	gone := parentApp("com.example.gone", "")
+	agent.ParentID = gone.Identifier
+	e.btm(gone, agent)
+	e.registryFails()
+	if got := onlyItem(t, e.run(loginTarget)).Orphan; got != "" {
+		t.Errorf("bundle present, orphan %q", got)
+	}
+	if err := os.RemoveAll(filepath.Join(e.Root, exampleBundle)); err != nil {
+		t.Fatal(err)
+	}
+	if out, stderr := e.runFail(loginTarget); out != "" || stderr == "" {
+		t.Errorf("bundle gone: stdout %q, stderr %q", out, stderr)
 	}
 }
 
@@ -1718,6 +1754,21 @@ func TestKextBundleLookup(t *testing.T) {
 	it := onlyItem(t, e.run(kextTarget))
 	if len(it.Paths) != 1 || it.Paths[0] != want {
 		t.Errorf("paths %v, want %s", it.Paths, want)
+	}
+}
+
+// The kext target needs only the teams of the registry, not the bundles of
+// the installed apps: an app whose Info.plist can't be parsed (which fails
+// the full inventory) does not matter.
+func TestKextReadsOnlyTheRegistry(t *testing.T) {
+	e := kextEnv(t)
+	bundle := kextBundle(e, "Example.kext", "com.example.driver")
+	e.codesignTeam(bundle, "ABCDE12345")
+	teamApp(e, "ABCDE12345")
+	e.write(filepath.Join(e.Root, "Applications/Bad.app/Contents/Info.plist"), 1)
+	e.kexts(kextRow{ID: "com.example.driver", Wired: "0x1000"})
+	if got := onlyItem(t, e.run(kextTarget)).Orphan; got != "" {
+		t.Errorf("team installed, orphan %q", got)
 	}
 }
 

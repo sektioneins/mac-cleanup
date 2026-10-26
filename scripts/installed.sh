@@ -290,12 +290,7 @@ _mc_split() {
 # vendor.
 mc_inventory() {
 	local dir=$1 f
-	if ! "$MC_LSREGISTER" -dump >"$dir/dump.raw" 2>/dev/null; then
-		echo "mac-cleanup: could not read the Launch Services registry ($MC_LSREGISTER)" >&2
-		rm -f "$dir/dump.raw"
-		return 1
-	fi
-	for f in ids teams names apple stale error apppath regpath installed groups vendorclaim; do : >"$dir/$f.raw"; done
+	_mc_registry_dump "$dir" || return 1
 	{
 		_mc_registry_tagged "$dir/dump.raw"
 		_mc_plist_apps "$dir/find.err"
@@ -312,19 +307,15 @@ mc_inventory() {
 	rm -f "$dir/regpath.new"
 	if [ -s "$dir/error.raw" ]; then
 		sed 's/^/mac-cleanup: /' "$dir/error.raw" >&2
-		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
+		_mc_raw_clean "$dir"
 		return 1
 	fi
-	if [ ! -s "$dir/installed.raw" ]; then
-		echo "mac-cleanup: the Launch Services registry has no installed app records" >&2
-		rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
-		return 1
-	fi
+	_mc_registry_installed "$dir" || return 1
 
 	for f in ids names apple; do
 		tr '[:upper:]' '[:lower:]' <"$dir/$f.raw" | grep -v '^$' | sort -u >"$dir/$f"
 	done
-	grep -v -e '^$' -e '^0000000000$' "$dir/teams.raw" | sort -u >"$dir/teams"
+	_mc_teams_file "$dir"
 	awk -F'\t' 'BEGIN { OFS = "\t" } { $1 = tolower($1); print }' "$dir/stale.raw" >"$dir/stale"
 	for f in groups vendorclaim; do
 		tr '[:upper:]' '[:lower:]' <"$dir/$f.raw" | grep -v '^$' | sort -u >"$dir/$f"
@@ -333,8 +324,64 @@ mc_inventory() {
 		awk -F. 'NF >= 3 { print $2 }' "$dir/ids"
 		cut -d. -f2 "$dir/vendorclaim"
 	} | sort -u >"$dir/vendors"
-	rm -f "$dir/dump.raw" "$dir"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
+	_mc_raw_clean "$dir"
 	return 0
+}
+
+# _mc_registry_dump DIR: write the registry dump to DIR/dump.raw and empty raw
+# files for every tag. Fails with a message when lsregister fails.
+_mc_registry_dump() {
+	local f
+	if ! "$MC_LSREGISTER" -dump >"$1/dump.raw" 2>/dev/null; then
+		echo "mac-cleanup: could not read the Launch Services registry ($MC_LSREGISTER)" >&2
+		rm -f "$1/dump.raw"
+		return 1
+	fi
+	for f in ids teams names apple stale error apppath regpath installed groups vendorclaim; do : >"$1/$f.raw"; done
+}
+
+# _mc_registry_installed DIR: fails with a message (and removes the raw files)
+# when the registry had no installed app.
+_mc_registry_installed() {
+	[ -s "$1/installed.raw" ] && return 0
+	echo "mac-cleanup: the Launch Services registry has no installed app records" >&2
+	_mc_raw_clean "$1"
+	return 1
+}
+
+# _mc_teams_file DIR: DIR/teams from DIR/teams.raw.
+_mc_teams_file() {
+	grep -v -e '^$' -e '^0000000000$' "$1/teams.raw" | sort -u >"$1/teams"
+}
+
+# _mc_raw_clean DIR: remove the dump and the raw files.
+_mc_raw_clean() {
+	rm -f "$1/dump.raw" "$1"/{ids,teams,names,apple,stale,error,apppath,regpath,installed,groups,vendorclaim}.raw
+}
+
+# mc_teams DIR: write DIR/teams as mc_inventory does: the team ids of the
+# installed apps in the registry. It reads only the registry, not the bundles
+# (the slow part of mc_inventory), so a bundle that can't be checked is no
+# error here. Fails like mc_inventory when the registry can't be read or has
+# no installed app.
+mc_teams() {
+	_mc_registry_dump "$1" || return 1
+	_mc_registry_tagged "$1/dump.raw" | _mc_split "$1"
+	_mc_registry_installed "$1" || return 1
+	_mc_teams_file "$1"
+	_mc_raw_clean "$1"
+}
+
+_MC_INVENTORY_RC=""
+
+# mc_inventory_once DIR: mc_inventory DIR on the first call; later calls return
+# its status without reading the apps again.
+mc_inventory_once() {
+	if [ -z "$_MC_INVENTORY_RC" ]; then
+		mc_inventory "$1"
+		_MC_INVENTORY_RC=$?
+	fi
+	return "$_MC_INVENTORY_RC"
 }
 
 # mc_is_bundle_id NAME: status 0 when NAME looks like a bundle identifier.

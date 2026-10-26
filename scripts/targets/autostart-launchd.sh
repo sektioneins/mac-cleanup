@@ -9,7 +9,7 @@ set -u
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/mc-launchd.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
-mc_inventory "$tmp" || exit 1
+# The installed apps are read into $tmp only when needed (mc_app_deleted).
 
 uid=$(id -u)
 gui="gui/$uid"

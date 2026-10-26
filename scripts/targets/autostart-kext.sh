@@ -31,7 +31,7 @@ printf '%s\n' "$loaded" | awk -v US="$_MC_US" '
 	}' >"$tmp/kexts"
 [ -s "$tmp/kexts" ] || exit 0
 
-mc_inventory "$tmp" || exit 1
+mc_teams "$tmp" || exit 1
 
 # The bundles in /Library/Extensions by bundle id: id, US, path.
 for k in "$MC_ROOT/Library/Extensions"/*.kext; do
