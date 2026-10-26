@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"mac-cleanup/internal/protocol"
 	"mac-cleanup/internal/scan"
@@ -132,12 +133,27 @@ func (m Model) scanningNames(t tab) []string {
 	return out
 }
 
-// tabBar is the second header line, with the current tab in brackets.
+// tabColour is each tab's own colour, one of the terminal's ANSI colours.
+var tabColour = [2]lipgloss.Color{tabSpace: "4", tabAutostart: "5"}
+
+// tabBar is the second header line: each tab in its colour, the current one
+// bold in reverse video, or in brackets when there is no colour.
 func (m Model) tabBar() string {
-	if m.tab == tabAutostart {
-		return "  Space   [Autostart]"
+	out := " "
+	for t, name := range [2]string{tabSpace: "Space", tabAutostart: "Autostart"} {
+		st, label := lipgloss.NewStyle().Foreground(tabColour[t]), " "+name+" "
+		if tab(t) == m.tab {
+			st = st.Bold(true).Reverse(true)
+			if lipgloss.ColorProfile() == termenv.Ascii {
+				label = "[" + name + "]"
+			}
+		}
+		if t > 0 {
+			out += "  "
+		}
+		out += st.Render(label)
 	}
-	return " [Space]   Autostart"
+	return strings.TrimRight(out, " ")
 }
 
 // runningText is the header figure of the Autostart tab: the memory of the

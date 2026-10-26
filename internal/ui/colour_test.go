@@ -92,3 +92,25 @@ func TestNoColourWithoutProfile(t *testing.T) {
 		}
 	}
 }
+
+// Each tab has its own colour; the current one is bold reverse video instead
+// of bracketed, at the same place.
+func TestTabBarColours(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(prev)
+	m := mkTabs(t, item("s", "space-item", 5_000_000))
+	want := map[tab]string{
+		tabSpace:     " \x1b[1;7;34m Space \x1b[0m  \x1b[35m Autostart \x1b[0m",
+		tabAutostart: " \x1b[34m Space \x1b[0m  \x1b[1;7;35m Autostart \x1b[0m",
+	}
+	for _, tb := range []tab{tabSpace, tabAutostart} {
+		m.tab = tb
+		if got := m.tabBar(); got != want[tb] {
+			t.Errorf("tab %d: got %q, want %q", tb, got, want[tb])
+		}
+		if lipgloss.Width(m.tabBar()) != len(" [Space]   Autostart ") {
+			t.Errorf("tab %d: width %d", tb, lipgloss.Width(m.tabBar()))
+		}
+	}
+}
