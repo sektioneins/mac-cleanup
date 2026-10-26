@@ -60,11 +60,11 @@ func printList(w io.Writer, results []scan.Result) {
 	}
 }
 
-// listMode runs the shared sources of dir once, then scans every script (in
-// parallel) with their environment and prints the items. It never runs an
-// item command.
+// listMode runs the shared sources of both tabs of dir once, then scans every
+// script (in parallel) with their environment and prints the items. It never
+// runs an item command.
 func listMode(w io.Writer, dir string, scripts []string) {
-	env := scan.Shared(context.Background(), dir)
+	env := append(scan.Shared(context.Background(), dir, false), scan.Shared(context.Background(), dir, true)...)
 	results := make([]scan.Result, len(scripts))
 	var wg sync.WaitGroup
 	for i, s := range scripts {

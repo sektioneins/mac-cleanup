@@ -21,7 +21,7 @@ type calls struct {
 func fakeDeps() (*Deps, *calls) {
 	c := &calls{}
 	d := &Deps{
-		Shared: func() []string { return nil },
+		Shared: func(bool) []string { return nil },
 		Scan:   func(script string, _ []string) scan.Result { return scan.Result{Script: script} },
 		Run: func(_ context.Context, it protocol.Item, a protocol.Action, _ io.Writer) action.Outcome {
 			return action.Outcome{Key: it.Key(), Action: a}
@@ -40,26 +40,30 @@ func send(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	return nm.(Model), cmd
 }
 
+// keyMsg is the key message of k, a key name or the runes to type.
+func keyMsg(k string) tea.KeyMsg {
+	switch k {
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "ctrl+c":
+		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+}
+
 func press(m Model, keys ...string) Model {
 	for _, k := range keys {
-		var msg tea.KeyMsg
-		switch k {
-		case "up":
-			msg = tea.KeyMsg{Type: tea.KeyUp}
-		case "down":
-			msg = tea.KeyMsg{Type: tea.KeyDown}
-		case "enter":
-			msg = tea.KeyMsg{Type: tea.KeyEnter}
-		case "esc":
-			msg = tea.KeyMsg{Type: tea.KeyEsc}
-		case "ctrl+c":
-			msg = tea.KeyMsg{Type: tea.KeyCtrlC}
-		case "space":
-			msg = tea.KeyMsg{Type: tea.KeySpace}
-		default:
-			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
-		}
-		m, _ = send(m, msg)
+		m, _ = send(m, keyMsg(k))
 	}
 	return m
 }

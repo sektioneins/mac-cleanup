@@ -1835,7 +1835,7 @@ func TestSysextToolFails(t *testing.T) {
 	}
 }
 
-// With the records shared through MC_SHARED_BTM (as the scan does), both BTM
+// With the records shared through MC_SHARED_AUTOSTART_BTM (as the scan does), both BTM
 // targets give the same items as when they read sfltool themselves, and do not
 // call it; a shared error makes them fail with its message.
 func TestAutostartSharedBTM(t *testing.T) {
@@ -1850,13 +1850,13 @@ func TestAutostartSharedBTM(t *testing.T) {
 			if len(want) != 1 {
 				t.Fatalf("with sfltool: %+v", want)
 			}
-			shared := e.output(e.command("shared/btm.sh"))
+			shared := e.output(e.command("shared/autostart-btm.sh"))
 			calls := e.btmCalls()
-			got := e.runWith(target, "MC_SHARED_BTM="+shared)
+			got := e.runWith(target, "MC_SHARED_AUTOSTART_BTM="+shared)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("shared records gave\n%+v\nwant\n%+v", got, want)
 			}
-			stdout, stderr, rc := e.runRC(withEnv(e.command(filepath.Join("targets", target+".sh")), "MC_SHARED_BTM_ERR=boom"))
+			stdout, stderr, rc := e.runRC(withEnv(e.command(filepath.Join("targets", target+".sh")), "MC_SHARED_AUTOSTART_BTM_ERR=boom"))
 			if rc == 0 || stdout != "" || !strings.Contains(stderr, "mac-cleanup: boom") {
 				t.Errorf("shared error: rc = %d, stdout = %q, stderr = %q", rc, stdout, stderr)
 			}

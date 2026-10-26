@@ -133,7 +133,7 @@ func withEnv(cmd *exec.Cmd, extra ...string) *exec.Cmd {
 	return cmd
 }
 
-// runWith is run with extra environment entries, such as MC_SHARED_BTM.
+// runWith is run with extra environment entries, such as MC_SHARED_AUTOSTART_BTM.
 func (e *env) runWith(target string, extra ...string) []protocol.Item {
 	e.t.Helper()
 	out := e.output(withEnv(e.command(filepath.Join("targets", target+".sh")), extra...))

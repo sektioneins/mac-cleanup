@@ -176,11 +176,11 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggle(rows[cur].item)
 		}
 	case "tab":
-		m.switchTab(1 - m.tab)
+		return m, m.switchTab(1 - m.tab)
 	case "1":
-		m.switchTab(tabSpace)
+		return m, m.switchTab(tabSpace)
 	case "2":
-		m.switchTab(tabAutostart)
+		return m, m.switchTab(tabAutostart)
 	case "o":
 		if len(rows) > 0 && len(rows[cur].item.Paths) > 0 {
 			_ = m.deps.Reveal(rows[cur].item.Paths[0])
@@ -311,8 +311,8 @@ func (m Model) listScreen() string {
 		m.twoCol(" "+heading.Render("mac-cleanup"), right+" "),
 		m.tabBar(),
 	}
-	if done := len(m.results); done < len(m.scripts) {
-		head[1] += "   scanning " + itoa(done) + "/" + itoa(len(m.scripts)) + " " + progressBar(done, len(m.scripts), 20)
+	if done, total := m.progress(m.tab); done < total {
+		head[1] += "   scanning " + itoa(done) + "/" + itoa(total) + " " + progressBar(done, total, 20)
 	}
 	head = append(head, m.rule())
 

@@ -277,9 +277,9 @@ func TestBTMSource(t *testing.T) {
 	if strings.Count(want, "\n") != 2 {
 		t.Fatalf("mc_btm wrote %q", want)
 	}
-	got := e.output(withEnv(e.command("shared/btm.sh"), "MC_SHARED_BTM=bogus", "MC_SHARED_BTM_ERR=bogus"))
+	got := e.output(withEnv(e.command("shared/autostart-btm.sh"), "MC_SHARED_AUTOSTART_BTM=bogus", "MC_SHARED_AUTOSTART_BTM_ERR=bogus"))
 	if got != want {
-		t.Errorf("btm.sh printed\n%q\nwant\n%q", got, want)
+		t.Errorf("autostart-btm.sh printed\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestBTMSourceFails(t *testing.T) {
 	e := newEnv(t)
 	e.btmFails()
 	_, want, _ := e.bashRC(`. autostart.sh; mc_btm "$HOME/b"`)
-	stdout, stderr, rc := e.runRC(e.command("shared/btm.sh"))
+	stdout, stderr, rc := e.runRC(e.command("shared/autostart-btm.sh"))
 	if rc != 1 || stdout != "" || stderr != want || want == "" {
 		t.Errorf("rc = %d, stdout = %q, stderr = %q; want 1, nothing and %q", rc, stdout, stderr, want)
 	}
@@ -304,10 +304,10 @@ func TestBTMShared(t *testing.T) {
 		{"", ""},
 		{"\n", ""},
 	} {
-		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`), "MC_SHARED_BTM="+c.value)
+		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`), "MC_SHARED_AUTOSTART_BTM="+c.value)
 		out, stderr, rc := e.runRC(cmd)
 		if rc != 0 || out != c.want {
-			t.Errorf("MC_SHARED_BTM=%q: rc = %d, out = %q, stderr = %q; want %q", c.value, rc, out, stderr, c.want)
+			t.Errorf("MC_SHARED_AUTOSTART_BTM=%q: rc = %d, out = %q, stderr = %q; want %q", c.value, rc, out, stderr, c.want)
 		}
 	}
 	if b, err := os.ReadFile(calls); err == nil {
@@ -320,10 +320,10 @@ func TestBTMSharedErr(t *testing.T) {
 	calls := e.btmCalls()
 	for _, c := range []struct{ value, want string }{
 		{"mac-cleanup: could not read the background task records (sfltool dumpbtm failed)", "mac-cleanup: could not read the background task records (sfltool dumpbtm failed)\n"},
-		{"btm.sh failed: exit status 2", "mac-cleanup: btm.sh failed: exit status 2\n"},
+		{"autostart-btm.sh failed: exit status 2", "mac-cleanup: autostart-btm.sh failed: exit status 2\n"},
 	} {
 		// The error wins over a value that is set as well.
-		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b"`), "MC_SHARED_BTM_ERR="+c.value, "MC_SHARED_BTM=")
+		cmd := withEnv(e.command("-c", `. lib.sh; . autostart.sh; mc_btm "$HOME/b"`), "MC_SHARED_AUTOSTART_BTM_ERR="+c.value, "MC_SHARED_AUTOSTART_BTM=")
 		_, stderr, rc := e.runRC(cmd)
 		if rc != 1 || stderr != c.want {
 			t.Errorf("rc = %d, stderr = %q; want 1 and %q", rc, stderr, c.want)
@@ -386,11 +386,11 @@ func TestSourceWithInstalled(t *testing.T) {
 // The harness drops MC_SHARED_* variables of the developer's environment, so
 // a target reads sfltool itself.
 func TestHarnessDropsInheritedShared(t *testing.T) {
-	t.Setenv("MC_SHARED_BTM_ERR", "stale")
-	t.Setenv("MC_SHARED_BTM", "stale")
+	t.Setenv("MC_SHARED_AUTOSTART_BTM_ERR", "stale")
+	t.Setenv("MC_SHARED_AUTOSTART_BTM", "stale")
 	e := newEnv(t)
 	e.btm(btmSample()...)
-	want := e.output(e.command("shared/btm.sh"))
+	want := e.output(e.command("shared/autostart-btm.sh"))
 	out := e.bash(`. autostart.sh; mc_btm "$HOME/b" && cat "$HOME/b"`)
 	if out != want {
 		t.Fatalf("mc_btm wrote %q, want %q", out, want)

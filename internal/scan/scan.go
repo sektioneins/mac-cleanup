@@ -44,13 +44,25 @@ func Discover(dir string) ([]string, error) {
 // under the system's limit for arguments and environment together.
 const SharedLimit = 256 << 10
 
-// Shared runs each dir/shared/*.sh once, in name order, and returns the
-// environment entries that share their output with the targets of one scan
-// round: MC_SHARED_<NAME>=<stdout> on success and MC_SHARED_<NAME>_ERR=<one
-// line> on failure. NAME is the file name without .sh, upper-cased, with every
-// character other than a letter or digit replaced by _. A source whose output
-// is larger than SharedLimit gets no entry at all.
-func Shared(ctx context.Context, dir string) []string {
+// AutostartPrefix starts the file names of the targets and shared sources of
+// the Autostart tab; all other scripts belong to the Space tab.
+const AutostartPrefix = "autostart-"
+
+// Autostart reports whether the script at path (or with that base name)
+// belongs to the Autostart tab.
+func Autostart(path string) bool {
+	return strings.HasPrefix(filepath.Base(path), AutostartPrefix)
+}
+
+// Shared runs the dir/shared/*.sh of one tab once, in name order: those of
+// the Autostart tab if autostart is true, else those of the Space tab. It
+// returns the environment entries that share their output with the targets of
+// that tab's scan round: MC_SHARED_<NAME>=<stdout> on success and
+// MC_SHARED_<NAME>_ERR=<one line> on failure. NAME is the file name without
+// .sh, upper-cased, with every character other than a letter or digit
+// replaced by _. A source whose output is larger than SharedLimit gets no
+// entry at all.
+func Shared(ctx context.Context, dir string, autostart bool) []string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil
@@ -59,6 +71,9 @@ func Shared(ctx context.Context, dir string) []string {
 	sort.Strings(paths)
 	var env []string
 	for _, p := range paths {
+		if Autostart(p) != autostart {
+			continue
+		}
 		base := filepath.Base(p)
 		key := SharedPrefix + sharedName(strings.TrimSuffix(base, ".sh"))
 		stdout, stderr, err := runBash(ctx, p, nil)

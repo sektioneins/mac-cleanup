@@ -52,7 +52,7 @@ func sharedDeps(t *testing.T, items func(script string) []protocol.Item) (*Deps,
 	d, _ := fakeDeps()
 	shared := 0
 	var scans []scanCall
-	d.Shared = func() []string {
+	d.Shared = func(bool) []string {
 		shared++
 		return []string{"MC_SHARED_X=" + strconv.Itoa(shared)}
 	}
@@ -118,11 +118,118 @@ func TestSharedStepPending(t *testing.T) {
 	}
 	m.gen = 1
 	m, cmd := send(m, sharedMsg{gen: 0, env: []string{"MC_SHARED_X=old"}})
-	if cmd != nil || m.env != nil {
-		t.Fatalf("stale shared result accepted: cmd=%v env=%q", cmd != nil, m.env)
+	if cmd != nil || m.env[tabSpace] != nil {
+		t.Fatalf("stale shared result accepted: cmd=%v env=%q", cmd != nil, m.env[tabSpace])
 	}
 	if len(*scans) != 0 {
 		t.Fatalf("scans %v", *scans)
+	}
+}
+
+// The Autostart round, whose shared step can ask for the admin password,
+// starts on the first switch to that tab, with its own shared step and only
+// the autostart-*.sh targets. Later switches start nothing; a rescan starts
+// only the Space round again.
+func TestAutostartRoundOnSwitch(t *testing.T) {
+	for _, k := range []string{"tab", "2"} {
+		t.Run(k, func(t *testing.T) {
+			d, _, scans := sharedDeps(t, func(string) []protocol.Item { return nil })
+			var rounds []bool
+			shared := d.Shared
+			d.Shared = func(autostart bool) []string {
+				rounds = append(rounds, autostart)
+				return shared(autostart)
+			}
+			space, autostart := "/x/targets/a.sh", "/x/targets/autostart-b.sh"
+			m := New([]string{space, autostart}, *d)
+			m = drain(t, m, m.Init())
+			if !reflect.DeepEqual(rounds, []bool{false}) {
+				t.Fatalf("shared steps %v before the switch, want only Space", rounds)
+			}
+			checkScans(t, *scans, []string{space}, "MC_SHARED_X=1")
+
+			*scans = nil
+			m, cmd := send(m, keyMsg(k))
+			m = drain(t, m, cmd)
+			if m.tab != tabAutostart || !reflect.DeepEqual(rounds, []bool{false, true}) {
+				t.Fatalf("tab %v, shared steps %v after %q", m.tab, rounds, k)
+			}
+			checkScans(t, *scans, []string{autostart}, "MC_SHARED_X=2")
+
+			*scans = nil
+			for _, k := range []string{"1", "2", "tab", "tab"} {
+				m, cmd = send(m, keyMsg(k))
+				m = drain(t, m, cmd)
+			}
+			if len(rounds) != 2 || len(*scans) != 0 {
+				t.Fatalf("switching back and forth: shared steps %v, scans %v", rounds, *scans)
+			}
+
+			nm, cmd := m.rescan()
+			m = drain(t, nm.(Model), cmd)
+			if !reflect.DeepEqual(rounds, []bool{false, true, false}) {
+				t.Fatalf("shared steps %v after the rescan", rounds)
+			}
+			checkScans(t, *scans, []string{space}, "MC_SHARED_X=3")
+		})
+	}
+}
+
+// Each tab shows the progress of its own round.
+func TestScanProgressPerTab(t *testing.T) {
+	d, _ := fakeDeps()
+	m := New([]string{"/x/targets/a.sh", "/x/targets/b.sh", "/x/targets/autostart-c.sh"}, *d)
+	if v := m.View(); !strings.Contains(v, "scanning 0/2") {
+		t.Fatalf("Space progress:\n%s", v)
+	}
+	m, _ = send(m, scanMsg(scan.Result{Script: "a.sh"}))
+	m, _ = send(m, scanMsg(scan.Result{Script: "b.sh"}))
+	if v := m.View(); strings.Contains(v, "scanning") {
+		t.Fatalf("Space done but still scanning:\n%s", v)
+	}
+	m = press(m, "2")
+	if v := m.View(); !strings.Contains(v, "scanning 0/1") {
+		t.Fatalf("Autostart progress:\n%s", v)
+	}
+	m, _ = send(m, scanMsg(scan.Result{Script: "autostart-c.sh"}))
+	if v := m.View(); strings.Contains(v, "scanning") {
+		t.Fatalf("Autostart done but still scanning:\n%s", v)
+	}
+}
+
+// A re-check of an Autostart item uses the env of the Autostart round.
+func TestRecheckAutostartEnv(t *testing.T) {
+	warn := true
+	d, _, scans := sharedDeps(t, func(s string) []protocol.Item {
+		if !scan.Autostart(s) {
+			return nil
+		}
+		it := auto("g", 9_000_000, "running", func(it *protocol.Item) {
+			it.Script = filepath.Base(s)
+			it.Default = protocol.Stop
+			it.Commands = map[protocol.Action]string{protocol.Stop: "true"}
+			if warn {
+				it.Warnings = []string{"busy"}
+			}
+		})
+		return []protocol.Item{it}
+	})
+	m := New([]string{"/x/targets/a.sh", "/x/targets/autostart-b.sh"}, *d)
+	m = drain(t, m, m.Init())
+	m, cmd := send(m, keyMsg("2"))
+	m = drain(t, m, cmd)
+	m.selected["autostart-b.sh/g"] = true
+	m = press(m, "enter")
+	if m.screen != screenReview {
+		t.Fatal("not on review screen")
+	}
+	*scans = nil
+	warn = false
+	m, cmd = send(m, keyMsg("r"))
+	m = drain(t, m, cmd)
+	checkScans(t, *scans, []string{"/x/targets/autostart-b.sh"}, "MC_SHARED_X=2")
+	if !strings.Contains(m.View(), "[ run ]") {
+		t.Fatalf("re-check not applied:\n%s", m.View())
 	}
 }
 

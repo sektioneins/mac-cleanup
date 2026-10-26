@@ -98,7 +98,7 @@ func TestShared(t *testing.T) {
 	write(t, filepath.Join(dir, "shared", "big.sh"), "head -c 262145 /dev/zero | tr '\\0' a\n")
 	write(t, filepath.Join(dir, "shared", "notes.txt"), "")
 	write(t, filepath.Join(dir, "targets", "t.sh"), "echo target >&2; exit 1\n")
-	got := Shared(context.Background(), dir)
+	got := Shared(context.Background(), dir, false)
 	want := []string{"MC_SHARED_X=one\ntwo\n", "MC_SHARED_Y_ERR=boom"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -108,7 +108,7 @@ func TestShared(t *testing.T) {
 func TestSharedLimit(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "shared", "max.sh"), "head -c 262144 /dev/zero | tr '\\0' a\n")
-	got := Shared(context.Background(), dir)
+	got := Shared(context.Background(), dir, false)
 	if len(got) != 1 || len(got[0]) != len("MC_SHARED_MAX=")+262144 {
 		t.Fatalf("got %d entries", len(got))
 	}
@@ -118,7 +118,7 @@ func TestSharedNames(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "shared", "b-tm.2.sh"), "printf v\n")
 	write(t, filepath.Join(dir, "shared", "a.sh"), "exit 3\n")
-	got := Shared(context.Background(), dir)
+	got := Shared(context.Background(), dir, false)
 	if len(got) != 2 || !strings.HasPrefix(got[0], "MC_SHARED_A_ERR=a.sh failed: exit status 3") || got[1] != "MC_SHARED_B_TM_2=v" {
 		t.Fatalf("got %q", got)
 	}
@@ -129,14 +129,14 @@ func TestSharedTimeout(t *testing.T) {
 	write(t, filepath.Join(dir, "shared", "slow.sh"), "sleep 5\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	got := Shared(ctx, dir)
+	got := Shared(ctx, dir, false)
 	if len(got) != 1 || !strings.HasPrefix(got[0], "MC_SHARED_SLOW_ERR=slow.sh failed: ") || strings.Contains(got[0], "\n") {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestSharedNone(t *testing.T) {
-	if got := Shared(context.Background(), t.TempDir()); len(got) != 0 {
+	if got := Shared(context.Background(), t.TempDir(), false); len(got) != 0 {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -155,10 +155,10 @@ func TestRunEnv(t *testing.T) {
 // MC_SHARED_* variables in mac-cleanup's own environment never reach a
 // script: only the round's env counts.
 func TestRunDropsInheritedShared(t *testing.T) {
-	t.Setenv("MC_SHARED_BTM_ERR", "stale")
+	t.Setenv("MC_SHARED_AUTOSTART_BTM_ERR", "stale")
 	t.Setenv("MC_SHARED_OTHER", "stale")
-	p := write(t, filepath.Join(t.TempDir(), "env.sh"), `printf 'item\nid\t%s\nname\tN\ncategory\tC\nsize\t10\ngrade\tregenerates\ndefault\tdelete\nexplain\t%s %s\ncmd_delete\ttrue\nend\n' "$MC_SHARED_BTM" "${MC_SHARED_BTM_ERR-unset}" "${MC_SHARED_OTHER-unset}"`+"\n")
-	r := Run(context.Background(), p, []string{"MC_SHARED_BTM=fresh"})
+	p := write(t, filepath.Join(t.TempDir(), "env.sh"), `printf 'item\nid\t%s\nname\tN\ncategory\tC\nsize\t10\ngrade\tregenerates\ndefault\tdelete\nexplain\t%s %s\ncmd_delete\ttrue\nend\n' "$MC_SHARED_AUTOSTART_BTM" "${MC_SHARED_AUTOSTART_BTM_ERR-unset}" "${MC_SHARED_OTHER-unset}"`+"\n")
+	r := Run(context.Background(), p, []string{"MC_SHARED_AUTOSTART_BTM=fresh"})
 	if r.Err != nil {
 		t.Fatal(r.Err)
 	}
@@ -171,7 +171,7 @@ func TestSharedDropsInheritedShared(t *testing.T) {
 	t.Setenv("MC_SHARED_X", "stale")
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "shared", "x.sh"), `printf '%s' "${MC_SHARED_X-unset}"`+"\n")
-	if got := Shared(context.Background(), dir); !reflect.DeepEqual(got, []string{"MC_SHARED_X=unset"}) {
+	if got := Shared(context.Background(), dir, false); !reflect.DeepEqual(got, []string{"MC_SHARED_X=unset"}) {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -182,7 +182,7 @@ func TestSharedNUL(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "shared", "n.sh"), `printf 'a\0b\n'`+"\n")
 	write(t, filepath.Join(dir, "shared", "o.sh"), `printf 'bo\0om\n' >&2; exit 1`+"\n")
-	got := Shared(context.Background(), dir)
+	got := Shared(context.Background(), dir, false)
 	want := []string{"MC_SHARED_N_ERR=n.sh printed a NUL byte", "MC_SHARED_O_ERR=boom"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -191,5 +191,33 @@ func TestSharedNUL(t *testing.T) {
 	p := write(t, filepath.Join(dir, "targets", "t.sh"), record+"x\n")
 	if r := Run(context.Background(), p, got); r.Err != nil {
 		t.Fatal(r.Err)
+	}
+}
+
+// Each tab has its own shared sources: autostart-*.sh for the Autostart tab,
+// the others for the Space tab.
+func TestSharedTab(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "shared", "x.sh"), "printf space\n")
+	write(t, filepath.Join(dir, "shared", "autostart-y.sh"), "printf auto\n")
+	if got, want := Shared(context.Background(), dir, false), []string{"MC_SHARED_X=space"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Space: got %q, want %q", got, want)
+	}
+	if got, want := Shared(context.Background(), dir, true), []string{"MC_SHARED_AUTOSTART_Y=auto"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Autostart: got %q, want %q", got, want)
+	}
+}
+
+func TestAutostart(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/x/targets/autostart-login.sh": true,
+		"autostart-kext.sh":             true,
+		"/x/autostart-dir/brew.sh":      false,
+		"/x/targets/brew.sh":            false,
+		"autostart.sh":                  false,
+	} {
+		if got := Autostart(p); got != want {
+			t.Errorf("Autostart(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

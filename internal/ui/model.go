@@ -22,9 +22,10 @@ const MinSize = 1_000_000
 
 // Deps are the side effects the UI uses, replaceable in tests.
 type Deps struct {
-	// Shared runs the shared sources once for a scan round and returns the
-	// environment entries every target of that round gets.
-	Shared func() []string
+	// Shared runs the shared sources of one tab (Autostart if autostart is
+	// true) once for that tab's scan round and returns the environment entries
+	// every target of the round gets.
+	Shared func(autostart bool) []string
 	// Scan runs one target script with the environment entries of its round.
 	Scan func(script string, env []string) scan.Result
 	// Run runs the item's command and copies its output to out as it comes.
@@ -43,7 +44,7 @@ type Deps struct {
 // and free-space probe for freePath.
 func DefaultDeps(freePath, scriptsDir string) Deps {
 	return Deps{
-		Shared: func() []string { return scan.Shared(context.Background(), scriptsDir) },
+		Shared: func(a bool) []string { return scan.Shared(context.Background(), scriptsDir, a) },
 		Scan:   func(s string, env []string) scan.Result { return scan.Run(context.Background(), s, env) },
 		Run: func(ctx context.Context, it protocol.Item, a protocol.Action, out io.Writer) action.Outcome {
 			return action.Run(ctx, it, a, out)
@@ -76,10 +77,11 @@ func openLog() (io.WriteCloser, string, error) {
 
 type scanMsg scan.Result
 
-// sharedMsg carries the environment of scan round gen once its shared step
-// is done; the round's target scans start then.
+// sharedMsg carries the environment of tab's round in scan round gen once its
+// shared step is done; the target scans of that tab start then.
 type sharedMsg struct {
 	gen int
+	tab tab
 	env []string
 }
 
@@ -110,7 +112,8 @@ type Model struct {
 	deps    Deps
 	scripts []string
 	gen     int           // scan round, raised by each rescan
-	env     []string      // environment of the round's scans and re-checks
+	started [2]bool       // per tab: its part of the round has started
+	env     [2][]string   // per tab: environment of its scans and re-checks
 	results []scan.Result // in arrival order
 	free    freeMsg
 	hasFree bool
@@ -140,17 +143,21 @@ type Model struct {
 	width, height int
 }
 
-// New creates the model; Init starts the scan round and a free-space probe.
+// New creates the model; Init starts the Space tab's part of the scan round
+// and a free-space probe.
 func New(scripts []string, d Deps) Model {
-	return Model{deps: d, scripts: scripts, selected: map[string]bool{}, width: 80, height: 24}
+	m := Model{deps: d, scripts: scripts, selected: map[string]bool{}, width: 80, height: 24}
+	m.started[tabSpace] = true
+	return m
 }
 
-// Init runs the round's shared step (the scans start when it is done) and the
-// free-space probe.
+// Init runs the Space tab's shared step (its scans start when it is done) and
+// the free-space probe. The Autostart tab's part of the round, whose shared
+// step can ask for the admin password, waits until the tab is first shown.
 func (m Model) Init() tea.Cmd {
-	gen, shared, free := m.gen, m.deps.Shared, m.deps.Free
+	free := m.deps.Free
 	return tea.Batch(
-		func() tea.Msg { return sharedMsg{gen, shared()} },
+		m.sharedStep(tabSpace),
 		func() tea.Msg {
 			f, t, err := free()
 			return freeMsg{f, t, err}
@@ -158,11 +165,28 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
-// startScans starts one scan per script, each with the round's environment.
-func (m Model) startScans() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(m.scripts))
+// sharedStep runs the shared step of t's part of the round.
+func (m Model) sharedStep(t tab) tea.Cmd {
+	gen, shared := m.gen, m.deps.Shared
+	return func() tea.Msg { return sharedMsg{gen, t, shared(t == tabAutostart)} }
+}
+
+// tabScripts returns the scripts of tab t.
+func (m Model) tabScripts(t tab) []string {
+	var out []string
 	for _, s := range m.scripts {
-		gen, env, scanFn := m.gen, m.env, m.deps.Scan
+		if tabOf(s) == t {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// startScans starts one scan per script of t, each with t's environment.
+func (m Model) startScans(t tab) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, s := range m.tabScripts(t) {
+		gen, env, scanFn := m.gen, m.env[t], m.deps.Scan
 		cmds = append(cmds, func() tea.Msg { return genScanMsg{gen, scanFn(s, env)} })
 	}
 	return tea.Batch(cmds...)
@@ -176,8 +200,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.env = msg.env
-		return m, m.startScans()
+		m.env[msg.tab] = msg.env
+		return m, m.startScans(msg.tab)
 	case genScanMsg:
 		if msg.gen != m.gen {
 			return m, nil

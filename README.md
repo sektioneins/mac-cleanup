@@ -36,7 +36,7 @@ Items under 1 MB are not listed. If something a target looks for isn't there, th
 
 ### Autostart
 
-The Autostart tab is about memory. It lists what starts by itself on this Mac and is not part of macOS: nothing from Apple is shown, and only your own account and the system-wide entries are looked at. The 1 MB minimum does not apply, so every entry is listed. Each category is sorted by memory, largest first, with entries that aren't running at the end.
+The Autostart tab is about memory. It lists what starts by itself on this Mac and is not part of macOS: nothing from Apple is shown, and only your own account and the system-wide entries are looked at. The 1 MB minimum does not apply, so every entry is listed. Each category is sorted by memory, largest first, with entries that aren't running at the end. The tab is scanned the first time you open it, not at startup, because reading the background task records asks for your admin password. After a rescan it's scanned again when you next open it.
 
 | Category | What is listed |
 |---|---|
@@ -111,7 +111,7 @@ To see what would be offered without opening the UI, run:
 ./mac-cleanup -list
 ```
 
-This scans everything and prints one tab-separated line per item: category, name, size, default action and its command. For Autostart items the size column shows the memory, as `mem` and the amount. It changes nothing.
+This scans everything, including the Autostart tab (so it asks for the admin password), and prints one tab-separated line per item: category, name, size, default action and its command. For Autostart items the size column shows the memory, as `mem` and the amount. It changes nothing.
 
 ## Keys
 

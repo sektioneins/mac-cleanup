@@ -250,7 +250,8 @@ func (m *Model) drop(key string) {
 }
 
 // recheck re-runs the scripts of the warned items, one scan per script, with
-// the environment of the current scan round (no new shared step). Items carry
+// the environment of the script's tab in the current scan round (no new
+// shared step). Items carry
 // the script's base name; the scan runs the round's path of that script. A
 // name with no path gives a failed re-check, never a run of the bare name.
 func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
@@ -269,7 +270,7 @@ func (m Model) recheck(warned []protocol.Item) (tea.Model, tea.Cmd) {
 			})
 			continue
 		}
-		scanFn, env := m.deps.Scan, m.env
+		scanFn, env := m.deps.Scan, m.env[tabOf(path)]
 		cmds = append(cmds, func() tea.Msg { return recheckMsg{gen, scanFn(path, env)} })
 	}
 	if len(cmds) == 0 {

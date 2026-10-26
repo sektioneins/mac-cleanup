@@ -3,9 +3,11 @@ package ui
 import (
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"mac-cleanup/internal/protocol"
+	"mac-cleanup/internal/scan"
 )
 
 // tab is one of the main screen's lists.
@@ -15,6 +17,14 @@ const (
 	tabSpace tab = iota
 	tabAutostart
 )
+
+// tabOf is the tab whose part of the scan round runs script.
+func tabOf(script string) tab {
+	if scan.Autostart(script) {
+		return tabAutostart
+	}
+	return tabSpace
+}
 
 // tabCursor is the list cursor of the tab that is not showing.
 type tabCursor struct {
@@ -73,15 +83,31 @@ func (m Model) itemsOf(t tab) []protocol.Item {
 	return out
 }
 
-// switchTab shows t, parking the cursor of the tab that was showing.
-func (m *Model) switchTab(t tab) {
+// switchTab shows t, parking the cursor of the tab that was showing. The first
+// time t shows in a scan round, it returns the start of t's part of the round.
+func (m *Model) switchTab(t tab) tea.Cmd {
 	if t == m.tab {
-		return
+		return nil
 	}
 	cur := tabCursor{m.cursor, m.curID}
 	m.cursor, m.curID = m.parked.cursor, m.parked.curID
 	m.parked = cur
 	m.tab = t
+	if m.started[t] {
+		return nil
+	}
+	m.started[t] = true
+	return m.sharedStep(t)
+}
+
+// progress counts the scan results of tab t's scripts and its scripts.
+func (m Model) progress(t tab) (done, total int) {
+	for _, r := range m.results {
+		if tabOf(r.Script) == t {
+			done++
+		}
+	}
+	return done, len(m.tabScripts(t))
 }
 
 // tabBar is the second header line, with the current tab in brackets.
