@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -108,6 +109,26 @@ func (m Model) progress(t tab) (done, total int) {
 		}
 	}
 	return done, len(m.tabScripts(t))
+}
+
+// scanningNames returns what tab t's part of the round is waiting for: its
+// shared sources, or the names (without .sh) of its scripts with no result
+// yet, which all run at the same time.
+func (m Model) scanningNames(t tab) []string {
+	if !m.sharedOK[t] {
+		return []string{"shared sources"}
+	}
+	got := map[string]bool{}
+	for _, r := range m.results {
+		got[r.Script] = true
+	}
+	var out []string
+	for _, s := range m.tabScripts(t) {
+		if b := filepath.Base(s); !got[b] {
+			out = append(out, Visible(strings.TrimSuffix(b, ".sh")))
+		}
+	}
+	return out
 }
 
 // tabBar is the second header line, with the current tab in brackets.

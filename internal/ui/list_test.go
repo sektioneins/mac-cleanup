@@ -182,6 +182,37 @@ func TestScanProgress(t *testing.T) {
 	}
 }
 
+// Next to the progress bar the header names what the round waits for, as far
+// as the width allows.
+func TestScanProgressNames(t *testing.T) {
+	d, _ := fakeDeps()
+	m := New([]string{"/s/targets/brew.sh", "/s/targets/cargo.sh", "/s/targets/autostart-kext.sh"}, *d)
+	line := func(m Model) string { return strings.Split(m.View(), "\n")[1] }
+	if l := line(m); !strings.HasSuffix(l, "░  shared sources") {
+		t.Fatalf("shared step: %q", l)
+	}
+	m, _ = send(m, sharedMsg{tab: tabSpace})
+	if l := line(m); !strings.HasSuffix(l, "░  brew, cargo") {
+		t.Fatalf("scans: %q", l)
+	}
+	m, _ = send(m, scanMsg(scan.Result{Script: "brew.sh"}))
+	if l := line(m); !strings.HasSuffix(l, "░  cargo") {
+		t.Fatalf("after one result: %q", l)
+	}
+	m.results = nil
+	for w, want := range map[int]string{
+		70: "░  brew, cargo", // 56 cells before the names, one kept free
+		69: "░  brew +1",
+		66: "░  brew +1",
+		65: "░",
+	} {
+		m.width = w
+		if l := line(m); !strings.HasSuffix(l, want) {
+			t.Errorf("width %d: %q, want suffix %q", w, l, want)
+		}
+	}
+}
+
 func TestProgressBar(t *testing.T) {
 	for _, c := range []struct {
 		done, total int

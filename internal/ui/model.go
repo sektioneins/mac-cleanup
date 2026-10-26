@@ -109,14 +109,15 @@ const (
 
 // Model is the whole UI state.
 type Model struct {
-	deps    Deps
-	scripts []string
-	gen     int           // scan round, raised by each rescan
-	started [2]bool       // per tab: its part of the round has started
-	env     [2][]string   // per tab: environment of its scans and re-checks
-	results []scan.Result // in arrival order
-	free    freeMsg
-	hasFree bool
+	deps     Deps
+	scripts  []string
+	gen      int           // scan round, raised by each rescan
+	started  [2]bool       // per tab: its part of the round has started
+	sharedOK [2]bool       // per tab: its shared step is done, its scans run
+	env      [2][]string   // per tab: environment of its scans and re-checks
+	results  []scan.Result // in arrival order
+	free     freeMsg
+	hasFree  bool
 
 	selected map[string]bool
 	screen   screen
@@ -200,7 +201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		m.env[msg.tab] = msg.env
+		m.env[msg.tab], m.sharedOK[msg.tab] = msg.env, true
 		return m, m.startScans(msg.tab)
 	case genScanMsg:
 		if msg.gen != m.gen {

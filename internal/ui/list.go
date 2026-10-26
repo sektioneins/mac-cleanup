@@ -313,6 +313,7 @@ func (m Model) listScreen() string {
 	}
 	if done, total := m.progress(m.tab); done < total {
 		head[1] += "   scanning " + itoa(done) + "/" + itoa(total) + " " + progressBar(done, total, 20)
+		head[1] += faint.Render(fitNames(m.scanningNames(m.tab), m.width-lipgloss.Width(head[1])-1))
 	}
 	head = append(head, m.rule())
 
@@ -341,6 +342,21 @@ func progressBar(done, total, width int) string {
 		filled = min(done*width/total, width)
 	}
 	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+// fitNames returns as many of names as fit into w cells, each but the first
+// after a comma, with a count of the rest, or "" when not even one fits.
+func fitNames(names []string, w int) string {
+	for k := len(names); k > 0; k-- {
+		s := "  " + strings.Join(names[:k], ", ")
+		if k < len(names) {
+			s += " +" + itoa(len(names)-k)
+		}
+		if lipgloss.Width(s) <= w {
+			return s
+		}
+	}
+	return ""
 }
 
 func sameRow(a, b row) bool { return a.view == b.view && a.item.Key() == b.item.Key() }
