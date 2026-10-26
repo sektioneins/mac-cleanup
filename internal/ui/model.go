@@ -124,11 +124,13 @@ type Model struct {
 	tab      tab       // list screen: the showing tab
 	parked   tabCursor // list screen: cursor of the other tab
 	cursor   int       // list screen: index into navigable rows (fallback)
+	top      int       // list screen: first visible body line
 	curID    string    // identity of the row under the cursor
 	vcurID   string    // identity of the item under the view cursor
 	view     string
 	viewCat  string // category the open view was entered from
 	vcursor  int    // view screen: index into the view's items
+	vtop     int    // view screen: first visible body line
 
 	revKeys   []string                   // review: item keys in list order
 	ract      map[string]protocol.Action // review: chosen action per key

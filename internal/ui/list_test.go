@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -364,4 +365,103 @@ func TestScanFailureStaysVisibleWhenScrolled(t *testing.T) {
 	if v := m.View(); !strings.Contains(v, "scan failed: bad: nope") {
 		t.Fatalf("failure hidden:\n%s", v)
 	}
+}
+
+// Moving up from the bottom of the window moves the cursor first; the list
+// scrolls only once the cursor is on the top line, and the first row of a
+// group brings its heading along.
+func TestListScrollsOnlyAtTheEdge(t *testing.T) {
+	d, _ := fakeDeps()
+	var items []protocol.Item
+	for i := 0; i < 40; i++ {
+		items = append(items, item("a", "item"+itoa(i), int64(40-i)*100_000_000))
+	}
+	m := New([]string{"a"}, *d)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 20})
+	m, _ = send(m, scanMsg(scan.Result{Script: "a", Items: items}))
+	// The body is the 9 lines after the 3 header lines.
+	window := func() (first, cur string) {
+		body := strings.Split(m.View(), "\n")[3:12]
+		re := regexp.MustCompile(`item\d+|▾ Developer`)
+		for _, l := range body {
+			if strings.HasPrefix(l, "> ") || strings.Contains(l, "> [") {
+				cur = re.FindString(l)
+			}
+		}
+		return re.FindString(body[0]), cur
+	}
+	check := func(wantFirst, wantCur string) {
+		t.Helper()
+		if first, cur := window(); first != wantFirst || cur != wantCur {
+			t.Fatalf("window starts at %q with the cursor on %q, want %q and %q:\n%s", first, cur, wantFirst, wantCur, m.View())
+		}
+	}
+	for i := 0; i < 20; i++ {
+		m = press(m, "down")
+	}
+	check("item12", "item20")
+	m = press(m, "up")
+	check("item12", "item19")
+	for i := 0; i < 7; i++ {
+		m = press(m, "up")
+	}
+	check("item12", "item12")
+	m = press(m, "up")
+	check("item11", "item11")
+	m = press(m, "down", "down")
+	check("item11", "item13")
+	for i := 0; i < 13; i++ {
+		m = press(m, "up")
+	}
+	check("▾ Developer", "item0")
+
+	// The window survives a trip to the other tab.
+	m = press(m, "down", "down", "down", "down", "down", "down", "down", "down", "down", "down")
+	check("item2", "item10")
+	m = press(m, "2", "1")
+	check("item2", "item10")
+}
+
+func TestViewScrollsOnlyAtTheEdge(t *testing.T) {
+	d, _ := fakeDeps()
+	var items []protocol.Item
+	for i := 0; i < 30; i++ {
+		items = append(items, item("a", "dir"+itoa(i), int64(30-i)*100_000_000, func(i *protocol.Item) {
+			i.View, i.Category = "~/Library/Caches", "Library"
+		}))
+	}
+	m := New([]string{"a"}, *d)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 20})
+	m, _ = send(m, scanMsg(scan.Result{Script: "a", Items: items}))
+	m = press(m, "enter")
+	// The body is the 11 lines after the 2 header lines.
+	check := func(wantFirst, wantCur string) {
+		t.Helper()
+		body := strings.Split(m.View(), "\n")[2:13]
+		re := regexp.MustCompile(`dir\d+`)
+		cur := ""
+		for _, l := range body {
+			if strings.Contains(l, "> [") {
+				cur = re.FindString(l)
+			}
+		}
+		if first := re.FindString(body[0]); first != wantFirst || cur != wantCur {
+			t.Fatalf("window starts at %q with the cursor on %q, want %q and %q:\n%s", first, cur, wantFirst, wantCur, m.View())
+		}
+	}
+	for i := 0; i < 15; i++ {
+		m = press(m, "down")
+	}
+	check("dir5", "dir15")
+	m = press(m, "up")
+	check("dir5", "dir14")
+	for i := 0; i < 9; i++ {
+		m = press(m, "up")
+	}
+	check("dir5", "dir5")
+	m = press(m, "up")
+	check("dir4", "dir4")
+	// Reopening the view starts at the top.
+	m = press(m, "esc", "enter")
+	check("dir0", "dir0")
 }

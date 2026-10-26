@@ -160,6 +160,14 @@ func (m *Model) setListCursor(rows []row, i int) {
 	}
 }
 
+// moveList puts the list cursor on rows[i], scrolling from where the list
+// shows now just enough to keep the cursor in sight.
+func (m *Model) moveList(rows []row, i int) {
+	top := m.scrollTop(m.listLayout(), m.top)
+	m.setListCursor(rows, i)
+	m.top = m.scrollTop(m.listLayout(), top)
+}
+
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.navRows()
 	cur := m.listIndex(rows)
@@ -168,9 +176,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 	case "up", "k":
-		m.setListCursor(rows, max(cur-1, 0))
+		m.moveList(rows, max(cur-1, 0))
 	case "down", "j":
-		m.setListCursor(rows, min(cur+1, max(len(rows)-1, 0)))
+		m.moveList(rows, min(cur+1, max(len(rows)-1, 0)))
 	case " ", "space":
 		if len(rows) > 0 && rows[cur].view == "" {
 			m.toggle(rows[cur].item)
@@ -188,7 +196,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if len(rows) > 0 && rows[cur].view != "" {
 			m.screen, m.view, m.viewCat = screenView, rows[cur].view, rows[cur].category
-			m.vcursor, m.vcurID = 0, ""
+			m.vcursor, m.vcurID, m.vtop = 0, "", 0
 		} else if n, _, _ := m.selectedTotals(); n > 0 {
 			m.startReview()
 		}
@@ -216,14 +224,20 @@ func (m Model) updateView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.vcurID = items[i].Key()
 		}
 	}
+	// move scrolls like moveList.
+	move := func(i int) {
+		top := m.scrollTop(m.viewLayout(), m.vtop)
+		setCur(i)
+		m.vtop = m.scrollTop(m.viewLayout(), top)
+	}
 	setCur(cur)
 	switch msg.String() {
 	case "esc":
 		m.screen = screenList
 	case "up", "k":
-		setCur(max(cur-1, 0))
+		move(max(cur-1, 0))
 	case "down", "j":
-		setCur(min(cur+1, max(len(items)-1, 0)))
+		move(min(cur+1, max(len(items)-1, 0)))
 	case " ", "space":
 		if cur < len(items) {
 			m.toggle(items[cur])
@@ -287,19 +301,35 @@ func box(on, cur bool) string {
 	return checkbox(on)
 }
 
+// screenLayout is a scrolling screen in parts: body scrolls between head and
+// foot, and its lines cs to ce belong to the cursor and must stay visible.
+type screenLayout struct {
+	head, body, foot []string
+	cs, ce           int
+}
+
 func (m Model) listScreen() string {
+	return m.frame(m.listLayout(), m.top)
+}
+
+func (m Model) listLayout() screenLayout {
 	rows := m.navRows()
 	cursor := m.listIndex(rows)
 
 	var body []string
-	curLine := 0
+	cs, ce := 0, 0
 	for _, g := range m.groups() {
 		body = append(body, m.twoCol(heading.Render("▾ "+Visible(g.name)), HumanSize(g.total)+"  "))
-		for _, r := range g.rows {
-			if len(rows) > 0 && sameRow(r, rows[cursor]) {
-				curLine = len(body)
+		for i, r := range g.rows {
+			cur := len(rows) > 0 && sameRow(r, rows[cursor])
+			if cur {
+				// The first row of a group brings its heading along.
+				cs, ce = len(body), len(body)
+				if i == 0 {
+					cs--
+				}
 			}
-			body = append(body, m.rowLine(r, len(rows) > 0 && sameRow(r, rows[cursor])))
+			body = append(body, m.rowLine(r, cur))
 		}
 	}
 
@@ -332,7 +362,7 @@ func (m Model) listScreen() string {
 	foot = append(foot, m.rule(), sel,
 		"  "+faint.Render("space select  tab switch  o finder  enter review/open  q quit"))
 
-	return strings.Join(m.frame(head, body, foot, curLine), "\n")
+	return screenLayout{head, body, foot, cs, ce}
 }
 
 // progressBar returns a bar of width cells, filled for done of total.
@@ -361,17 +391,26 @@ func fitNames(names []string, w int) string {
 
 func sameRow(a, b row) bool { return a.view == b.view && a.item.Key() == b.item.Key() }
 
-// frame returns head, a window of body that keeps curLine visible, and foot.
-func (m Model) frame(head, body, foot []string, curLine int) []string {
-	avail := max(m.height-len(head)-len(foot), 3)
-	start := 0
-	if curLine >= avail {
-		start = curLine - avail + 1
-	}
-	end := min(start+avail, len(body))
-	out := append([]string{}, head...)
-	out = append(out, body[start:end]...)
-	return append(out, foot...)
+// room is the number of body lines that fit between head and foot.
+func (m Model) room(l screenLayout) int {
+	return max(m.height-len(l.head)-len(l.foot), 3)
+}
+
+// scrollTop returns the first body line to show: top moved just enough to
+// show the cursor lines, and no further down than the body needs.
+func (m Model) scrollTop(l screenLayout, top int) int {
+	room := m.room(l)
+	top = max(min(top, l.cs), l.ce-room+1)
+	return max(min(top, len(l.body)-room), 0)
+}
+
+// frame renders head, the body from line top (see scrollTop), and foot.
+func (m Model) frame(l screenLayout, top int) string {
+	start := m.scrollTop(l, top)
+	end := min(start+m.room(l), len(l.body))
+	out := append([]string{}, l.head...)
+	out = append(out, l.body[start:end]...)
+	return strings.Join(append(out, l.foot...), "\n")
 }
 
 func (m Model) rowLine(r row, cur bool) string {
@@ -428,6 +467,10 @@ func (m Model) detail(r row) []string {
 }
 
 func (m Model) viewScreen() string {
+	return m.frame(m.viewLayout(), m.vtop)
+}
+
+func (m Model) viewLayout() screenLayout {
 	items := m.viewItems(m.view, m.viewCat)
 	var selN int
 	var selSize int64
@@ -461,5 +504,5 @@ func (m Model) viewScreen() string {
 	}
 	foot := append([]string{m.rule()}, detail...)
 	foot = append(foot, m.rule(), "  "+faint.Render("up/down move  space select  o finder  esc back to list"))
-	return strings.Join(m.frame(head, body, foot, cur), "\n")
+	return screenLayout{head, body, foot, cur, cur}
 }

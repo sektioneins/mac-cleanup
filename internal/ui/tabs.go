@@ -31,6 +31,7 @@ func tabOf(script string) tab {
 type tabCursor struct {
 	cursor int
 	curID  string
+	top    int
 }
 
 // listed reports whether an item shows up in its tab: autostart items always,
@@ -90,8 +91,8 @@ func (m *Model) switchTab(t tab) tea.Cmd {
 	if t == m.tab {
 		return nil
 	}
-	cur := tabCursor{m.cursor, m.curID}
-	m.cursor, m.curID = m.parked.cursor, m.parked.curID
+	cur := tabCursor{m.cursor, m.curID, m.top}
+	m.cursor, m.curID, m.top = m.parked.cursor, m.parked.curID, m.parked.top
 	m.parked = cur
 	m.tab = t
 	if m.started[t] {
