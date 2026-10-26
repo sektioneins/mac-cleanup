@@ -179,6 +179,17 @@ just check       # all of the above, then build
 
 The UI is written in Go with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Colours come from your terminal's own palette, and setting `NO_COLOR` turns them off. Each tab has its own colour, and the current one is shown in reverse; without colour it is in brackets, as in the example at the top.
 
+## Similar projects
+
+Other open-source tools that clean up a Mac:
+
+- [Mole](https://github.com/tw93/Mole): a command-line cleaner for macOS and Windows, with native apps as well.
+- [mac-cleanup-py](https://github.com/mac-cleanup/mac-cleanup-py): a Python cleanup script for macOS, the successor of mac-cleanup-sh.
+- [mac-cleanup-go](https://github.com/2ykwang/mac-cleanup-go): a TUI in Go that scans caches and logs and moves what you select to the Trash.
+- [sukkiri](https://github.com/mmrakt/sukkiri): a TUI disk cleanup tool in Rust.
+- [TidyMyMac](https://github.com/viniciussouzao/tidymymac): a terminal tool in Go to scan, review and reclaim disk space.
+- [mac-clean](https://github.com/vstorm-co/mac-clean): a disk cleaner with a local GUI that moves to the Trash by default.
+
 ## Licence
 
 Copyright 2026 SektionEins GmbH (Ben Fuhrmannek). Licensed under the [Apache License, Version 2.0](LICENSE).
